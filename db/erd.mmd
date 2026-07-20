@@ -1,0 +1,183 @@
+erDiagram
+    users ||--o{ leads : "assigned_caller_id"
+    users ||--o{ lead_assignments : "caller_id"
+    users ||--o{ renewals : "assigned_caller_id"
+    users ||--o{ follow_ups : "assigned_caller_id"
+    users ||--o{ notifications : "recipient_user_id"
+    users ||--o{ sessions : "user_id"
+    users ||--o{ audit_log : "changed_by"
+    users ||--o{ lead_activities : "created_by"
+    users ||--o{ users : "created_by/updated_by"
+
+    customers ||--o{ leads : "customer_id"
+    customers ||--o{ orders : "customer_id"
+    customers ||--o{ renewals : "customer_id"
+    customers ||--o{ follow_ups : "customer_id"
+
+    products ||--o{ leads : "requested_product_id"
+    products ||--o{ order_items : "product_id"
+    products ||--o{ renewals : "product_id"
+
+    leads ||--o{ lead_activities : "lead_id"
+    leads ||--o{ lead_assignments : "lead_id"
+    leads ||--o{ orders : "lead_id"
+    leads ||--o{ follow_ups : "lead_id"
+
+    orders ||--o{ order_items : "order_id"
+    orders ||--o{ renewals : "order_id"
+
+    renewals ||--o{ follow_ups : "renewal_id"
+    renewals ||--o{ renewals : "previous_renewal_id"
+
+    users {
+        uuid id PK
+        text employee_id UK
+        citext email UK
+        text phone
+        user_role role
+        user_status status
+        int assigned_leads_count
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    customers {
+        uuid id PK
+        text full_name
+        text primary_mobile UK
+        text alternate_mobile
+        citext email
+        text city
+        text state
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    products {
+        uuid id PK
+        text sku UK
+        text generic_name
+        text brand_name
+        numeric unit_price
+        boolean is_active
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    leads {
+        uuid id PK
+        uuid customer_id FK
+        text customer_name
+        text mobile
+        uuid requested_product_id FK
+        int quantity
+        uuid assigned_caller_id FK
+        lead_source lead_source
+        lead_priority priority
+        lead_status status
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    lead_activities {
+        uuid id PK
+        timestamptz created_at PK
+        uuid lead_id FK
+        lead_activity_type activity_type
+        text description
+        uuid created_by FK
+    }
+
+    lead_assignments {
+        uuid id PK
+        uuid lead_id FK
+        uuid caller_id FK
+        uuid assigned_by FK
+        timestamptz assigned_at
+        timestamptz unassigned_at
+    }
+
+    orders {
+        uuid id PK
+        text order_number UK
+        uuid customer_id FK
+        uuid lead_id FK
+        text customer_name
+        numeric total_amount
+        payment_status payment_status
+        order_stage stage
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    order_items {
+        uuid id PK
+        uuid order_id FK
+        uuid product_id FK
+        text medicine_name_snapshot
+        int quantity
+        numeric unit_price_snapshot
+        numeric line_total
+        text batch_number
+    }
+
+    renewals {
+        uuid id PK
+        uuid customer_id FK
+        text customer_name
+        uuid order_id FK
+        uuid product_id FK
+        text medicine_name
+        timestamptz order_date
+        timestamptz renewal_date
+        timestamptz expiry_date
+        uuid assigned_caller_id FK
+        uuid previous_renewal_id FK
+        timestamptz renewed_at
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    follow_ups {
+        uuid id PK
+        uuid customer_id FK
+        text customer_name
+        uuid lead_id FK
+        uuid renewal_id FK
+        uuid assigned_caller_id FK
+        timestamptz scheduled_at
+        follow_up_type type
+        follow_up_status status
+        uuid created_by FK
+        uuid updated_by FK
+    }
+
+    notifications {
+        uuid id PK
+        timestamptz created_at PK
+        uuid recipient_user_id FK
+        text title
+        notification_type type
+        boolean is_read
+        notification_entity_type related_entity_type
+        uuid related_entity_id
+    }
+
+    audit_log {
+        uuid id PK
+        timestamptz changed_at PK
+        text table_name
+        uuid record_id
+        audit_action action
+        uuid changed_by FK
+        jsonb old_data
+        jsonb new_data
+    }
+
+    sessions {
+        uuid id PK
+        uuid user_id FK
+        text token_hash UK
+        timestamptz issued_at
+        timestamptz expires_at
+    }

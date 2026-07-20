@@ -1,0 +1,24 @@
+# GitHub's language bar measures BYTES of tracked files, so a few large non-application
+# files can dominate it and misrepresent what the project actually is. These directives only
+# affect that statistic — nothing is excluded from the repository, from builds, or from
+# search.
+
+# Archived design explorations kept for provenance. They are ~45% of all the SQL in the repo
+# and are not part of the live schema (that is db/schema.sql + db/migrations/).
+db/_archive/**            linguist-documentation
+
+# docs/TEST_PLAN.md alone is ~460KB — larger than the entire frontend — which made Markdown
+# the repo's "main language".
+docs/**                   linguist-documentation
+*.md                      linguist-documentation
+
+# Generated, not authored.
+**/package-lock.json      linguist-generated
+server/prisma/schema.prisma linguist-generated
+
+# Keep line endings sane across Windows/Linux checkouts.
+* text=auto eol=lf
+*.sql text eol=lf
+*.png binary
+*.jpg binary
+*.ico binary

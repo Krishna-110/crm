@@ -1,0 +1,267 @@
+[
+  {
+    "severity": "high",
+    "category": "update-anomaly",
+    "description": "follow_ups.assigned_caller_id (line 424) is a denormalized cache meant to mirror the owning lead's/renewal's assigned_caller_id (per the comment at lines 421-424, populated by trg_sync_followup_caller, function sync_followup_assigned_caller at lines 821-837). That trigger only fires 'BEFORE INSERT OR UPDATE OF lead_id, renewal_id ON follow_ups' (line 836) — it recomputes the cached caller only when the follow-up's own lead_id/renewal_id column changes. It is never invoked when the underlying lead is reassigned (trg_sync_lead_assignment_history at line 785 fires on leads, not on follow_ups). There is no equivalent of the assigned_leads_count reconciliation view for this cache.",
+    "failure_scenario": "A follow-up is created for lead L while L.assigned_caller_id = Alice (follow_ups.assigned_caller_id gets set to Alice). Admin later reassigns lead L to Bob (UPDATE leads SET assigned_caller_id = Bob). The existing follow_up row is untouched: assigned_caller_id still = Alice. Because follow_ups RLS policies (lines 1299-1329) filter strictly on assigned_caller_id = app_current_user_id(), Alice (who no longer owns the lead) can still see/update/complete that follow-up, while Bob (the new owner) cannot see it at all — a silent data-visibility and ownership drift with real security/workflow impact, not just a stale display value.",
+    "suggestedFix": "Extend sync_lead_assignment_history (or add a new AFTER UPDATE OF assigned_caller_id trigger on leads/renewals) to also UPDATE follow_ups SET assigned_caller_id = NEW.assigned_caller_id WHERE lead_id = NEW.id (and similarly for renewals via renewal_id), or drop the cached column and join to leads/renewals for RLS instead.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "high",
+    "category": "check-constraint",
+    "description": "renewals.chk_renewals_dates (line 401) is CHECK (expiry_date >= order_date AND renewal_date >= order_date). It never constrains renewal_date against expiry_date. Per the table's own semantics (renewal_date = 'when the caller should reach out', expiry_date = 'when supply actually runs out', comments lines 392-393) and per compute_renewal_status()'s logic (expiry_date < today -> overdue, else renewal_date <= today -> due_today), renewal_date is supposed to be <= expiry_date — a reminder that fires after the medicine has already run out is a logical contradiction the schema currently allows.",
+    "failure_scenario": "INSERT INTO renewals (..., order_date='2026-01-01', renewal_date='2026-06-01', expiry_date='2026-02-01', ...) passes chk_renewals_dates (both dates are >= order_date) even though the reminder date is 4 months after the medicine is already out. renewals_view/compute_renewal_status would then report 'overdue' for months while days_remaining is deeply negative, with no signal anything is wrong at write time — this is exactly the kind of illogical-date invariant the review was asked to catch (e.g. 'expiryDate after orderDate').",
+    "suggestedFix": "Add CONSTRAINT chk_renewals_renewal_before_expiry CHECK (renewal_date <= expiry_date) to the renewals table.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "medium",
+    "category": "redundant-data",
+    "description": "renewals.medicine_name (line 390) is commented as 'legacy/display label, kept in sync with product_id when set', mirroring the customer_name snapshot pattern elsewhere in the same table. But unlike customer_name (which has an explicit BEFORE INSERT/UPDATE trigger, trg_renewals_customer_name_sync, lines applying sync_customer_name_snapshot), there is no trigger anywhere in Section 7 that copies products.generic_name/brand_name into renewals.medicine_name when product_id is set or changed. The documented invariant is simply not implemented.",
+    "failure_scenario": "A renewal is created with product_id pointing at product 'Metformin 500mg' but medicine_name is inserted (or later updated) as 'Metformin' by the application; if the product is later renamed/rebranded in the catalog, renewals.medicine_name silently continues to show the old text forever with zero enforcement — contradicting the comment's claim that it stays in sync, and giving callers/dashboards a wrong medicine label with no drift detection (no reconciliation view exists for this column, unlike assigned_leads_count).",
+    "suggestedFix": "Either add a BEFORE INSERT/UPDATE OF product_id trigger on renewals that sets medicine_name from products when product_id IS NOT NULL (mirroring sync_customer_name_snapshot), or drop the 'kept in sync' claim and treat it as a true independent legacy field.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "medium",
+    "category": "redundant-data",
+    "description": "renewals.order_date (line 391, NOT NULL) duplicates orders.created_at whenever renewals.order_id (nullable) is populated, but no trigger or CHECK ties the two together — unlike customer_name, which has an explicit sync trigger for the analogous redundancy.",
+    "failure_scenario": "INSERT INTO renewals (order_id, order_date, ...) with order_date set to a value that does not match the referenced order's created_at (a typo, a timezone conversion error, or simply stale data entered by a batch job generating renewal schedules from order history) is accepted silently — there is nothing in the schema preventing renewals.order_date from disagreeing with orders.created_at for the same order_id, so the two can drift apart from the moment of insert with no way to detect it later.",
+    "suggestedFix": "Add a BEFORE INSERT/UPDATE OF order_id trigger on renewals that copies order_date from orders.created_at when order_id IS NOT NULL, or add a periodic reconciliation view (as done for assigned_leads_count) that flags renewals whose order_date differs from the linked order's created_at.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "medium",
+    "category": "missing-unique-constraint",
+    "description": "sessions.token_hash (line 495) is NOT NULL but has no UNIQUE constraint or unique index anywhere in the schema (only ix_sessions_user_id and ix_sessions_expires_at exist, per the index list in Section 6.13). An authentication token hash is exactly the kind of value that should be enforced unique at the database layer, not left solely to the application's token-generation code.",
+    "failure_scenario": "A bug or race condition in the session-issuing code (e.g. a weak RNG, a retried INSERT after a timeout, or two concurrent login requests hashing the same value) inserts two sessions rows with identical token_hash values. Because there is no UNIQUE constraint, both rows persist; whichever user's session lookup query matches first on that hash could authenticate as the wrong user — the database offers no defense-in-depth against this class of bug for the one table explicitly called out as security-sensitive (auth tokens).",
+    "suggestedFix": "Add CREATE UNIQUE INDEX ux_sessions_token_hash ON sessions (token_hash);",
+    "lens": "normalization"
+  },
+  {
+    "severity": "medium",
+    "category": "referential-consistency",
+    "description": "orders (lines 337-341) has both customer_id (NOT NULL) and an independent lead_id (nullable, ON DELETE SET NULL). Nothing enforces that when lead_id IS NOT NULL, the referenced lead's customer_id equals the order's own customer_id. The same pattern repeats on follow_ups (lines 414-424), which independently carries customer_id, lead_id, and renewal_id with no check that all three, when present, agree on the same customer.",
+    "failure_scenario": "An order can be inserted with customer_id = X and lead_id pointing to a lead whose customer_id = Y (a different customer) — e.g. from an application bug that looks up the wrong lead_id during order creation from a lead. The row passes every constraint in the schema, producing an order that displays/links to two different customers' data simultaneously (customers.id = X for billing/shipping context, but drilling into 'source lead' surfaces customer Y's intake details). The same applies to a follow_up whose lead_id/renewal_id belongs to a different customer than follow_ups.customer_id.",
+    "suggestedFix": "Add a trigger (or, since cross-table CHECKs are not directly expressible in Postgres, a BEFORE INSERT/UPDATE trigger) on orders and follow_ups that verifies the referenced lead's/renewal's customer_id matches the row's own customer_id, raising an exception on mismatch.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "low",
+    "category": "referential-integrity",
+    "description": "Foreign keys throughout the schema (e.g. leads.assigned_caller_id, renewals.assigned_caller_id, follow_ups.assigned_caller_id, orders.customer_id, leads.requested_product_id) can freely reference rows where the parent is soft-deleted (deleted_at IS NOT NULL) or logically inactive (users.status = 'inactive', products.is_active = false). Standard Postgres FK constraints only check that the referenced row physically exists, not that it is 'live' by the schema's own soft-delete/active convention, and no trigger anywhere enforces this.",
+    "failure_scenario": "A lead can be INSERTed or UPDATEd with assigned_caller_id set to a user row whose status = 'inactive' or deleted_at IS NOT NULL (e.g. an off-boarded caller); the FK happily allows it since the row still exists. The lead is now silently assigned to someone who should no longer receive work, and ix_leads_assigned_caller / the caller-scoped RLS policies will still treat that assignment as valid.",
+    "suggestedFix": "Add BEFORE INSERT/UPDATE triggers (or application-layer validation, since a plain CHECK cannot query another table) on leads/renewals/follow_ups/orders that reject assigning a caller_id/customer_id/product_id whose referenced row has deleted_at IS NOT NULL, and for users specifically reject status <> 'active' at assignment time.",
+    "lens": "normalization"
+  },
+  {
+    "severity": "high",
+    "category": "missing-fk-index",
+    "description": "The `created_by`/`updated_by` audit columns (all FKs to `users(id) ON DELETE SET NULL`) are left unindexed on nearly every table: `users` (lines 140-141), `customers` (180-181), `products` (215-216), `leads` (276-277), `orders` (357-358), `renewals` (399-400), and `follow_ups` (432-433), plus `lead_assignments.assigned_by` (line 320, also `ON DELETE SET NULL`). Section 6 (lines 588-655) never adds indexes for any of these columns. This is exactly the classic Postgres FK footgun the schema otherwise took care to avoid on every 'primary' relationship (customer_id, assigned_caller_id, product_id, etc.), but missed on the audit trail.",
+    "failure_scenario": "A super_admin hard-deletes or the app updates a `users` row (users_delete policy allows this, or any UPDATE that changes `id` indirectly via role/status churn triggers FK checks on referencing rows). Postgres must find every row in users/customers/products/leads/orders/renewals/follow_ups/lead_assignments whose created_by/updated_by/assigned_by equals that user id, to null it out. With no index on any of these ~15 columns, each is a full sequential scan of a potentially large table, and this happens synchronously inside the deleting transaction, causing lock contention and multi-second (or worse, at scale) stalls on a user deactivation/removal. It also means an admin feature like 'show all records last touched by user X' has no index to hit.",
+    "suggestedFix": "Add `CREATE INDEX ix_<table>_created_by ON <table> (created_by);` and `..._updated_by ON <table> (updated_by);` (and `ix_lead_assignments_assigned_by ON lead_assignments (assigned_by);`) for every table listed, mirroring the pattern already used for FKs like assigned_caller_id.",
+    "lens": "indexing"
+  },
+  {
+    "severity": "high",
+    "category": "missing-fk-index",
+    "description": "`renewals.order_id` (line 388, FK to orders `ON DELETE SET NULL`) and `renewals.product_id` (line 389, FK to products `ON DELETE SET NULL`) have no supporting index. Unlike the audit columns above, these are operationally meaningful relationships (a renewal is generated from a specific order/product), yet Section 6's renewals indexes (lines 634-635) only cover `customer_id` and `assigned_caller_id`.",
+    "failure_scenario": "Deleting/expiring an order or deactivating a product (`ON DELETE SET NULL`) forces a full scan of `renewals` to find rows referencing it. Separately, a natural product-support query like 'show all renewals tied to this order' or 'all pending renewals for product X' has no index to use and falls back to a sequential scan of the whole renewals table as it grows.",
+    "suggestedFix": "Add `CREATE INDEX ix_renewals_order_id ON renewals (order_id);` and `CREATE INDEX ix_renewals_product_id ON renewals (product_id);` (partial `WHERE deleted_at IS NULL` if desired, consistent with the other renewals indexes).",
+    "lens": "indexing"
+  },
+  {
+    "severity": "medium",
+    "category": "partitioning-strategy",
+    "description": "`lead_activities` (partitioned by RANGE(created_at), line 304), `notifications` (RANGE(created_at), line 461), and `audit_log` (RANGE(changed_at), line 481) all partition on a timestamp, but each table's dominant read pattern filters on a *different* column: lead_activities is read as 'full activity timeline for lead X' (`ix_lead_activities_lead_id_created_at`, lead_id-first), notifications as 'unread/all notifications for user X' (`ix_notifications_recipient*`, recipient_user_id-first), and audit_log as 'history for record X' (`ix_audit_log_table_record`, table_name/record_id-first). None of these predicates constrain created_at/changed_at, so partition pruning cannot eliminate any partition for these queries.",
+    "failure_scenario": "Opening a lead's detail page (a core, high-frequency CRM UI action) runs effectively `SELECT * FROM lead_activities WHERE lead_id = X ORDER BY created_at DESC`. With no created_at bound, the planner must Append across every live partition (bootstrap keeps 2 months back to 12 months forward, and the documented retention window is 24 months), executing the local (lead_id, created_at) index on each one and merging results — cost grows roughly linearly with partition count instead of being a single index lookup on one unpartitioned table. The same applies to a caller's 'my notifications' bell and to any audit-trail-for-record lookup (worse there, given the 7-year audit_log retention window implying dozens of partitions).",
+    "suggestedFix": "Either (a) have the application always add a created_at/changed_at lower bound (e.g., last N months) to these queries so partition pruning applies, accepting that very old activity requires an explicit wider query, or (b) reconsider the partition key for lead_activities specifically, since 'view this lead's timeline' is the primary access pattern, not date-range scans — a non-partitioned table with a strong (lead_id, created_at) index (and separate date-based archival via `deleted_at`/an archival job) may serve that access pattern better than RANGE(created_at) partitioning.",
+    "lens": "indexing"
+  },
+  {
+    "severity": "medium",
+    "category": "missing-composite-index",
+    "description": "The 'my pending X, sorted by due date' dashboard queries for renewals and follow_ups each have two indexes that don't cover the combined predicate. For renewals: `ix_renewals_assigned_caller` (line 635, `assigned_caller_id` only) and `ix_renewals_expiry_pending`/`ix_renewals_renewal_date_pending` (lines 405-406, `expiry_date`/`renewal_date` only, no assigned_caller_id) — a caller's 'my due renewals' view (`WHERE assigned_caller_id = X AND deleted_at IS NULL AND renewed_at IS NULL ORDER BY expiry_date`) can only use one of these as the primary access path. For follow_ups: `ix_follow_ups_assigned_caller` (line 641) and `ix_follow_ups_pending` (line 642, `scheduled_at` only) have the identical gap for 'my pending follow-ups sorted by scheduled_at'.",
+    "failure_scenario": "As the caller base and renewal/follow-up volume grow, the single-column indexes force either a bitmap AND of two indexes (extra scan cost) or the planner picks the caller-id index and re-filters/re-sorts the (potentially large) per-caller result set in memory, instead of walking one covering index in already-sorted order — this shows up as increasing latency on the callers' daily 'my work today' dashboard specifically, the screen hit hardest and most often in a CRM.",
+    "suggestedFix": "Add composite partial indexes: `CREATE INDEX ix_renewals_caller_pending_expiry ON renewals (assigned_caller_id, expiry_date) WHERE deleted_at IS NULL AND renewed_at IS NULL;` and `CREATE INDEX ix_follow_ups_caller_pending_scheduled ON follow_ups (assigned_caller_id, scheduled_at) WHERE status = 'pending' AND deleted_at IS NULL;`.",
+    "lens": "indexing"
+  },
+  {
+    "severity": "low",
+    "category": "missing-index",
+    "description": "`ix_follow_ups_pending` (line 642) is a partial index restricted to `status = 'pending'`, but a calendar/date-range view of follow-ups (e.g. 'everything scheduled this week' across pending/completed/missed) is a plausible CRM UI need with no supporting index on `scheduled_at` alone.",
+    "failure_scenario": "A date-range query over follow_ups that doesn't restrict to status='pending' (e.g. an activity calendar showing completed and missed items too) cannot use the partial index and falls back to a sequential scan as the table grows.",
+    "suggestedFix": "If the UI needs a full-status date-range view, add a non-partial `CREATE INDEX ix_follow_ups_scheduled_at ON follow_ups (scheduled_at) WHERE deleted_at IS NULL;` alongside the existing pending-only partial index.",
+    "lens": "indexing"
+  },
+  {
+    "severity": "low",
+    "category": "n-plus-one-risk",
+    "description": "The `customers_select` RLS policy for the `caller` role (line 1169) is a triple `UNION ALL` of correlated `EXISTS` subqueries against leads/renewals/follow_ups, each keyed off `customers.id`. Every candidate row in a customer list/search scan run by a caller must evaluate up to three separate correlated subplans.",
+    "failure_scenario": "A caller-facing customer search/list at meaningful scale (tens of thousands of customers) pays a per-row cost of up to three index probes (into leads, renewals, follow_ups) just to determine row visibility, on top of whatever the base query's own WHERE/search predicate costs — this is not a single-join query the planner can flatten as cleanly as a direct foreign-key filter, and gets more expensive as the three child tables grow independently.",
+    "suggestedFix": "If caller-facing customer list/search performance becomes a bottleneck, consider a denormalized reverse-lookup (e.g., a materialized view or a maintained `customer_caller_visibility(customer_id, caller_id)` table refreshed by the same triggers that already sync assigned_caller_id) that the RLS policy can join against with a single index lookup instead of three unioned EXISTS subqueries.",
+    "lens": "indexing"
+  },
+  {
+    "severity": "critical",
+    "category": "privilege-escalation / IDOR",
+    "description": "leads.customer_id is never validated against the RLS/ownership model. leads_insert and leads_update only check `assigned_caller_id = app_current_user_id()`; they place no constraint on customer_id at all. Because a foreign-key referential-integrity check only verifies the referenced row exists — it is NOT subject to RLS on the referenced table — a 'caller' can execute `INSERT INTO leads (customer_id, customer_name, mobile, alternate_number, address, city, state, pincode, medicine_required, quantity, assigned_caller_id, ...) VALUES (<any existing customers.id>, 'x', '9999999999', ..., <self>)` for ANY customer UUID they can learn (leaked/observed/guessed), even one that has no genuine relationship to this lead. Once that row exists, customers_select's caller branch (`EXISTS (SELECT 1 FROM leads l WHERE l.customer_id = customers.id AND l.assigned_caller_id = app_current_user_id() ...)`) is satisfied, so the caller instantly gains full SELECT access to that customer's PII (full_name, primary/alternate mobile, email, address, city, state, pincode, doctor_name) — and via the identical EXISTS clause in customers_update, full UPDATE (tamper) access to that same customer row. This is a complete bypass of the requirement 'Caller sees only their own assigned leads ... derived from those leads': the customer was never legitimately assigned, the caller manufactured the linkage themselves. The same class of bug exists on follow_ups.customer_id (follow_ups_insert/update only check assigned_caller_id, not customer_id), though there it happens to be blocked today only as an unintended side effect: trg_follow_ups_customer_name_sync unconditionally re-derives customer_name from customers via an RLS-gated SELECT, and if the caller isn't otherwise authorized to see the target customer that SELECT returns 0 rows, leaving customer_name NULL, which then fails the NOT NULL constraint. That protection is incidental (a trigger meant only for snapshot-syncing, not an access-control gate) and would silently disappear if that trigger were ever changed to SECURITY DEFINER, made conditional, or if the NOT NULL constraint were relaxed.",
+    "suggestedFix": "Add an explicit, intentional guard rather than relying on RLS's blind trust of caller-supplied FK columns. Options: (1) a BEFORE INSERT/UPDATE trigger on leads (and a hardened version of the existing follow_ups trigger) that, when app_current_role() = 'caller' and NEW.customer_id IS NOT NULL, only permits the link if the intake data actually matches the target customer (e.g. NEW.mobile = customers.primary_mobile for that id) OR the customer_id was resolved server-side via a SECURITY DEFINER lookup-by-mobile function rather than accepted as a raw client-supplied UUID; (2) add a RESTRICTIVE policy on leads/follow_ups requiring that correlation before allowing customer_id to be set/changed by a caller; (3) at minimum, make the customer_id ownership check explicit in customers_select/customers_update (e.g. require the referencing lead to have been created by/for that caller with matching contact details) instead of trusting any row satisfying the EXISTS join.",
+    "lens": "security"
+  },
+  {
+    "severity": "high",
+    "category": "session-spoofing / auth-binding",
+    "description": "The entire RLS model rests on two independently-set, freeform transaction-local GUCs (`app.current_user_id`, `app.current_role`) that the schema never cross-verifies against the users table. `set_config` is an ordinary function any session running as app_user can call with arbitrary arguments — nothing in the schema binds app.current_role to the actual `role` column of the row identified by app.current_user_id. This means the database itself cannot distinguish a legitimate 'this session authenticated as user X who really is an admin' from 'the app tier (or an attacker via SQL injection, a stale/forged JWT claim, or an app bug) simply told Postgres current_role=super_admin.' Because app_user is the single, shared, non-BYPASSRLS role for every request, correctness of the whole three-role model reduces entirely to unverified application-tier trust with zero defense-in-depth at the data layer — precisely the property the review was asked to check ('cannot be trivially spoofed'), and as written it can be, by any bug or injection point that lets attacker-influenced text reach set_config.",
+    "suggestedFix": "Replace the two independently-set GUCs with a single SECURITY DEFINER 'establish session context' function, e.g. `set_app_session(p_user_id uuid, p_credential ...) RETURNS void`, that itself looks up `role`, `status`, and `deleted_at` from `users` for p_user_id (after verifying the caller's session token/credential server-side) and calls set_config for both app.current_user_id and app.current_role from that verified row — never accepting a role string as an independent, separately-supplied parameter. This makes it structurally impossible for the app tier to assert a role that doesn't match what's actually stored in `users.role`, closing the single point of failure.",
+    "lens": "security"
+  },
+  {
+    "severity": "medium",
+    "category": "grants / defense-in-depth",
+    "description": "SECTION 10 grants `SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO app_user` (and mirrors it in ALTER DEFAULT PRIVILEGES for future tables), with no per-table carve-outs. This includes audit_log (a write-once compliance ledger that no RLS policy ever permits any app-tier INSERT/UPDATE/DELETE on) and lead_assignments (no INSERT/UPDATE/DELETE policy for any role — populated only by the SECURITY DEFINER trigger). Today RLS-default-deny (no matching permissive policy for those commands) is the only thing stopping app_user from tampering with these tables directly. That is a single point of failure: if RLS is ever accidentally disabled on one of these tables in a future migration, if a policy is mistakenly added, or if app_user is ever granted BYPASSRLS by mistake, the blanket table-level GRANT immediately allows app_user to insert/alter/delete audit records or fabricate assignment history with no second layer of protection.",
+    "suggestedFix": "Grant privileges per-table instead of ALL TABLES: give app_user only SELECT on audit_log (revoke INSERT/UPDATE/DELETE explicitly), only SELECT/INSERT on lead_assignments select-side (or SELECT only, since even INSERT is trigger-only), and only SELECT/INSERT on lead_activities' UPDATE/DELETE (revoked, since those are super_admin-only via RLS but not via GRANT). This way tampering with the audit trail and system-managed history requires defeating both RLS and the underlying GRANT, not RLS alone.",
+    "lens": "security"
+  },
+  {
+    "severity": "low",
+    "category": "password-storage",
+    "description": "users.password_hash is documented as 'bcrypt/argon2 hash ONLY. Never plaintext,' but this is enforced purely by convention/comment — there is no CHECK constraint verifying the stored value actually has the shape of a bcrypt ($2a$/$2b$/$2y$) or argon2 ($argon2id$/$argon2i$/$argon2d$) hash. A bug or oversight in application code (e.g. a debug code path, a broken migration, or a future developer forgetting to hash) could insert a plaintext password directly into this column with nothing in the database rejecting it.",
+    "suggestedFix": "Add a CHECK constraint on users.password_hash restricting it to recognized hash formats, e.g. `CONSTRAINT chk_users_password_hash_format CHECK (password_hash ~ '^\\$2[aby]\\$' OR password_hash ~ '^\\$argon2(id|i|d)\\$')`, so plaintext (or any obviously non-hash value) is rejected at the schema level as a last line of defense.",
+    "lens": "security"
+  },
+  {
+    "severity": "high",
+    "category": "partition-maintenance",
+    "description": "Partition creation and materialized-view refresh are never actually scheduled. `pg_cron` itself is left commented out (line 49), and every `cron.schedule(...)` call for future partition creation (lines 548-552) and for MV refresh (lines 1110-1113) is also commented SQL, not live code. The one-time bootstrap DO block (lines 527-539) only pre-creates `lead_activities`/`notifications`/`audit_log` partitions through 12 months past deployment time. Past that window, unless an operator manually stands up an external scheduler, every new row for these three tables silently lands in the `*_default` catch-all partition (lines 543-545) instead of erroring — at 'tens of millions of rows spanning years' scale that default partition becomes an ever-growing, un-pruned table that later needs a full-table scan to split when someone finally tries to `ALTER TABLE ... ATTACH PARTITION` real monthly partitions on top of it.",
+    "suggestedFix": "Ship the pg_cron extension creation and the two cron.schedule() calls (partition creation + MV refresh) as live, uncommented statements (or an equivalent external scheduler config) that runs by default, not as a documentation comment. Add a monitoring check on default-partition row counts (pg_partition_tree) so an operator is alerted long before it becomes a bottleneck.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "high",
+    "category": "unbounded-jsonb-growth",
+    "description": "`log_audit()` (lines 958-987) stores `to_jsonb(OLD)`/`to_jsonb(NEW)` — full-row snapshots, not diffs — into the partitioned `audit_log` table on every single INSERT/UPDATE/DELETE against `users, customers, products, leads, orders, order_items, renewals, follow_ups, lead_assignments` (trigger loop, lines 975-987). Several of those tables carry large STORED `tsvector` generated columns (`leads.search_vector`, `customers.search_vector`, `orders.search_vector`) which get serialized into both old_data and new_data on every write. Since `leads.notes`/`customers.address` etc. are expected to be edited far more often than discrete 'activities' occur, and each such edit also regenerates the tsvector, a single trivial field edit duplicates the *entire row* (twice) into a ledger that per the schema's own retention note is kept live for 7 years (line 560). At 100x lead volume this makes audit_log balloon disproportionately faster than the actual data it audits and dominate storage/I-O.",
+    "suggestedFix": "Capture column-level diffs (only keys that changed) instead of full before/after row snapshots, and explicitly exclude generated/derived columns (search_vector) from the captured payload before insert.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "index-write-amplification",
+    "description": "`leads` carries two GIN indexes (`ix_leads_mobile_trgm`, `ix_leads_search`, lines 610-611); `ix_leads_search` covers a STORED tsvector generated from customer_name, mobile, medicine_required, doctor_name, city, state, AND notes (lines 266-271). `notes` is the field callers are expected to update most often during normal CRM work, so nearly every note edit forces a tsvector regeneration plus a GIN index write on top of the full-row audit-log write from the previous finding. GIN index maintenance is substantially more write-expensive than a B-tree entry, and customers carries a similar exposure (mobile/name trigram + search GIN indexes, lines 592-594) whenever address/city/doctor_name change. At millions-of-leads scale with continuous note-taking this is a real, compounding write bottleneck on the busiest table in the schema.",
+    "suggestedFix": "Consider excluding free-text fields that churn heavily (notes) from the indexed search_vector, or move full-text search off the hot OLTP table onto an asynchronously-refreshed search projection; monitor GIN pending-list autovacuum lag under production write load.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "index-design",
+    "description": "`ix_leads_created_at` (line 605) and `ix_orders_created_at` (line 626) are the only indexes in their respective sections that omit `WHERE deleted_at IS NULL`, unlike every sibling index on the same tables (ix_leads_status, ix_leads_priority, ix_orders_stage, ix_orders_payment_status, etc., all partial). Both are DESC indexes almost certainly serving 'most recent N leads/orders' dashboard queries. Since there is no hard-delete/purge path for soft-deleted leads/orders, these two indexes will keep accumulating dead entries the dashboard will never want, inflating index size and maintenance cost unnecessarily as years of soft-deleted rows pile up at 100x scale.",
+    "suggestedFix": "Add `WHERE deleted_at IS NULL` to ix_leads_created_at and ix_orders_created_at, consistent with the partial-index convention used everywhere else in the schema.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "missing-fk-index",
+    "description": "renewals.order_id and renewals.product_id (lines 388-389, both ON DELETE SET NULL) have no supporting index — section 6.9 (lines 634-635) indexes only customer_id and assigned_caller_id on that table. The same gap recurs systemically: created_by/updated_by self-references to users(id) on users, customers, products, leads, orders, renewals, follow_ups (e.g. lines 140-141, 180-181, 215-216, 276-277, 357-358, 399-400, 432-433) have no dedicated index anywhere in Section 6. At tens-of-millions-row scale, a hard DELETE of a single product/order/user (a real, if rare, admin/super_admin operation per the RLS policies) forces Postgres to sequentially scan every referencing table to null out matching rows, since there is no index to look up 'who points at this id' — a multi-minute, lock-holding scan on a huge table.",
+    "suggestedFix": "Add indexes on renewals(order_id), renewals(product_id), and on each table's (created_by)/(updated_by) columns; or, more robustly, switch these audit-trail FKs to RESTRICT and rely on soft-delete for the referenced users/products/orders so the scan-heavy SET NULL cascade path is never exercised in practice.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "hot-row-contention",
+    "description": "users.assigned_leads_count (line 134) is maintained by `maintain_assigned_leads_count()` (lines 719-754), an AFTER-trigger that issues a single-row UPDATE on the target caller's users row for every INSERT/UPDATE/DELETE touching leads.assigned_caller_id/deleted_at — the exact 'single hot counter row' pattern. Any bulk operation that assigns or reassigns many leads to the same caller in one transaction or tight batch (bulk lead-list import, mass reassignment during offboarding — both plausible, routine CRM operations at 100x lead volume) will serialize entirely on that one users row for the whole batch, since each row-level trigger firing takes a row lock on the same target. v_lead_count_reconciliation (section 8.3) only detects drift after the fact; it does not relieve the contention.",
+    "suggestedFix": "For known bulk-assignment code paths, compute the net delta per caller once and apply it via a single grouped UPDATE (bypassing the per-row trigger), or move assigned_leads_count to an asynchronously-refreshed counter/materialized view instead of a synchronous per-write trigger.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "low",
+    "category": "trigger-efficiency",
+    "description": "orders.total_amount (line 346) is recomputed by update_order_total() (lines 873-890), which runs a full `SUM(line_total) FROM order_items WHERE order_id = ...` aggregation on every single order_items INSERT/UPDATE/DELETE. Populating an order with N line items costs O(N) work per item insert (O(N^2) total for the order) and each item write takes a row lock on the parent orders row, serializing concurrent item writes to the same order. Compounds under any batch/bulk order-import path at 100x order volume.",
+    "suggestedFix": "Switch to an incremental delta update (total_amount = total_amount + NEW.line_total - COALESCE(OLD.line_total,0), handling INSERT/UPDATE/DELETE cases) instead of re-aggregating all line items on every row event.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "partition-maintenance",
+    "description": "follow_ups and orders/order_items have no partitioning and no documented retention/archival policy at all, unlike lead_activities/notifications/audit_log which get an explicit monthly-partition + 24-month/7-year retention plan (Section 5). Given millions of leads each generating multiple follow_ups over its lifecycle (calls, reminders, callbacks) plus an order per conversion, follow_ups and orders/order_items are plausible candidates to reach tens-of-millions-of-rows scale exactly like the tables that were partitioned, yet the schema provides no growth plan for them.",
+    "suggestedFix": "Extend the existing ensure_monthly_partition()/list_droppable_partitions() pattern to follow_ups (partitioned by created_at or scheduled_at) once volume approaches lead_activities-scale, and make an explicit, documented retention decision for orders/order_items rather than leaving it unaddressed.",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "materialized-view-refresh",
+    "description": "mv_caller_performance's documented refresh cadence (every 5-10 minutes via the commented-out cron.schedule, lines 1108-1116) requires a full aggregate join/scan of the entire leads table (filtered only by u.role='caller', line 1097) and follow_ups on every refresh, with no incremental/windowed refresh mechanism. At 100x lead volume, a full-table aggregation every 5-10 minutes may eventually take longer than the refresh interval itself, causing overlapping REFRESH CONCURRENTLY runs to queue up and silently push staleness well past the documented SLA, with no alerting defined on refresh duration.",
+    "suggestedFix": "Add monitoring/alerting on actual REFRESH MATERIALIZED VIEW duration versus the cron interval, and consider maintaining the counts that change on every write (e.g. open_leads, converted_leads) via an incrementally-updated summary table fed by triggers, reserving the full materialized view only for the harder-to-incrementalize aggregate (avg_days_to_convert).",
+    "lens": "scalability"
+  },
+  {
+    "severity": "medium",
+    "category": "enum-extensibility",
+    "description": "Native ENUMs (lead_status, lead_priority, lead_source, order_stage, etc.) can only ever be extended by ADD VALUE — Postgres has no ALTER TYPE ... DROP/RENAME VALUE. Renaming a status (e.g. 'no_response' -> 'unreachable') or removing an obsolete one (e.g. merging 'closed' into 'converted') requires the full create-new-type/rewrite-every-dependent-column/view/function/index dance, which IS a blocking, table-rewriting migration. The rationale (#1) only defends the 'add a value' case, not this much more likely 'rename/retire a value' case that status taxonomies commonly need over time.",
+    "suggestedFix": "Either document the rename/retire path explicitly (new type + USING cast + drop old type, with the exact list of dependents that must be touched: ix_leads_open, mv_caller_performance, RLS-adjacent app code), or move just the lead/order status columns to a small lookup table (status code + label + is_terminal flag) since those are the ones most likely to be edited/renamed by the business, keeping ENUMs only for truly fixed unions like audit_action/notification_entity_type.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "medium",
+    "category": "enum-extensibility",
+    "description": "Business logic about which lead_status values are 'terminal' is hardcoded as literal enum values in multiple independent places: the partial index ix_leads_open (`status NOT IN ('converted','closed','not_interested')`, line ~608) and mv_caller_performance (`FILTER (WHERE l.status NOT IN ('converted','closed','not_interested'))` and `FILTER (WHERE l.status = 'converted')`, lines ~1081-1103). Adding a new terminal status later (e.g. 'cancelled') silently fails to update these unless every occurrence is remembered and migrated together — there is no single source of truth for 'is this status terminal'.",
+    "suggestedFix": "Add a small immutable lookup/mapping (even a CASE-based SQL function like compute_renewal_status) for 'is_terminal_lead_status(status)' and reference it from the index predicate and materialized views instead of repeating the literal list, so a future status addition only requires editing one function definition (and reindexing/refreshing) rather than hunting down every occurrence.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "medium",
+    "category": "multi-tenancy",
+    "description": "The documented organization_id retrofit path (#10) adds a nullable organization_id to every business table and RESTRICTIVE RLS policies, but never mentions that plain FK columns (leads.customer_id, orders.customer_id, renewals.customer_id, follow_ups.lead_id/renewal_id, etc.) only check that the referenced id exists — not that it belongs to the same organization. Without composite (organization_id, id) keys and (organization_id, fk_id) foreign keys, or an explicit trigger/CHECK cross-referencing organization_id on both sides, nothing in the database stops a lead in org A from being linked to a customer in org B once organization_id is introduced; only RLS row-visibility, not referential integrity, would be protecting tenant isolation.",
+    "suggestedFix": "When documenting the retrofit, explicitly call out that FK targets must also be validated same-org (either via composite FKs on (organization_id, id) or a BEFORE INSERT/UPDATE trigger checking parent.organization_id = child.organization_id), otherwise a single app bug can create permanent cross-tenant data linkage that RLS alone won't have prevented at write time.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "medium",
+    "category": "multi-tenancy",
+    "description": "The retrofit plan (#10) doesn't address audit_log: the log_audit() SECURITY DEFINER trigger (SECTION 7.11) copies TG_TABLE_NAME/record_id/old_data/new_data but has no organization_id column of its own, and the admin-scoped audit_log_select RLS policy (SECTION 9) currently grants admins visibility by table_name only, with no per-row tenant scoping. Adding organization_id to audit_log later requires also modifying the log_audit() function body itself (to pull organization_id out of NEW/OLD), not just adding a column and a policy as the other steps imply.",
+    "suggestedFix": "Note in the retrofit doc that log_audit() must be updated in lockstep with adding organization_id to audit_log (e.g. `to_jsonb(NEW)->>'organization_id'`), or the audit trail will have NULL organization_id for all rows written after the column is added until the trigger is fixed.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "medium",
+    "category": "future-extensibility",
+    "description": "customers.primary_mobile/alternate_mobile (lines 163-164) hardcode exactly two phone slots on the row itself rather than a repeatable child table. A plausible near-future need (a third number, WhatsApp-only number, work vs. personal tagging) requires an ALTER TABLE ADD COLUMN each time rather than an INSERT. Worse, the generated `search_vector` column on customers (lines 171-176) directly concatenates primary_mobile/alternate_mobile as literal source columns; normalizing phones out into a customer_phones child table later means dropping/redefining this STORED generated column, which forces a full table rewrite of customers (not a simple additive change) — plus the trigram index ix_customers_mobile_trgm and the unique dedup index only ever cover primary_mobile, so alternate numbers are neither deduped nor fuzzy-searchable today.",
+    "suggestedFix": "If multiple phone numbers per customer is plausible soon, introduce a customer_phones(customer_id, phone, label, is_primary) child table now (or at least design the generated search_vector to pull from a view/function rather than raw columns) so the eventual migration is additive rather than requiring a rewrite of customers and its generated column.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "medium",
+    "category": "future-extensibility",
+    "description": "customers.address/city/state/pincode (lines ~166-170) are flat single-address columns, and the same STORED generated `search_vector` column (lines 171-176) consumes city/state/pincode directly. Adding multiple addresses per customer (home/billing/shipping) later means moving those columns into a customer_addresses child table, which — same as the phone-number issue above — forces the generated tsvector column on customers to be dropped and rebuilt (full-table rewrite on what is likely one of the largest tables), rather than being a purely additive change.",
+    "suggestedFix": "Same remedy as the phone-number finding: either stand up customer_addresses now, or decouple the generated search_vector from the raw address columns (e.g. via a maintained side column/materialized text field populated by trigger) so a later address normalization doesn't require rewriting the generated column.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "low",
+    "category": "future-extensibility",
+    "description": "There is no subscription/recurring-series concept: each renewals row (SECTION 4.5) references a single order_id and product_id with no self-reference (e.g. previous_renewal_id or a subscription_id grouping a chain of periodic renewals for the same customer+product). If the product evolves into true recurring/auto-renewing subscriptions (pause, cancel, change cadence), grouping historical renewal cycles will have to be inferred from customer_id+product_id+chronology, which is ambiguous once a customer has concurrent or changing subscriptions for the same product.",
+    "suggestedFix": "Add a nullable subscription_id (or previous_renewal_id) to renewals now, or document that a subscriptions table with a renewals.subscription_id FK is the intended additive retrofit, so historical linkage isn't purely inferential.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "low",
+    "category": "future-extensibility",
+    "description": "The products/order_items design (SECTION 3.3, 4.4) has no facility at all for stock/inventory — no stock_quantity, no batch/lot number, no batch expiry date. For a medicine distribution business this is a plausible near-term need, and it isn't purely painless to retrofit: order_items today captures only product_id/quantity/unit_price_snapshot with no batch attribution, so once a stock_batches/inventory table is added, all pre-existing order_items rows will have no batch traceability (unrecoverable after the fact), which matters for pharma recall scenarios explicitly implied by the audit_log's 7-year 'regulated medical-distribution compliance' retention comment.",
+    "suggestedFix": "If batch-level traceability is likely to matter (recalls, expiry-dated stock), add a nullable batch_id/lot_number column to order_items now, even if unused, so it's populated going forward instead of retrofitted with a permanent historical gap; a plain stock_quantity counter on products can be added later without issue since it carries no historical dependency.",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "low",
+    "category": "naming-consistency",
+    "description": "Table naming uses an underscore (`follow_ups`) but the two ENUM types tied to that table drop it (`followup_type`, `followup_status`, lines 83-84) — every other type in SECTION 1 mirrors its table name faithfully (lead_status/leads, order_stage/orders, notification_type/notifications). This is a small but real inconsistency a future migration author is likely to trip over when grepping for 'follow_up_type'.",
+    "suggestedFix": "Rename to follow_up_type / follow_up_status for consistency with the follow_ups table and the rest of the naming convention (requires ALTER TYPE ... RENAME, which is metadata-only and safe).",
+    "lens": "migration-future"
+  },
+  {
+    "severity": "low",
+    "category": "naming-consistency",
+    "description": "Phone-format CHECK constraints are inconsistent across tables with no documented reason: users.phone (line 142) and customers.alternate_mobile/leads.alternate_number use a loose international-ish pattern `^[0-9+ ()-]{7,15}$`, while customers.primary_mobile and leads.mobile (line 280) enforce a strict 10-digit Indian mobile pattern `^[6-9][0-9]{9}$`. Nothing in the comments explains why an internal employee's phone is unrestricted format but a customer's primary number is tightly constrained, so a future column added for 'yet another phone number' has no clear convention to follow.",
+    "suggestedFix": "Document explicitly why employee phone vs. customer mobile use different validation regimes (e.g. employees may have extensions/international numbers, customers are India-only mobile), or unify to the same domain-based check for any column representing the same real-world concept.",
+    "lens": "migration-future"
+  }
+]
