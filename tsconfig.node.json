@@ -19,5 +19,11 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts"]
+  // Root-level tooling entry points. Deliberately a glob rather than a single filename:
+  // an allowlist of one is how server/tests/ ended up outside type coverage entirely.
+  // Anything nothing imports — a config, a script, a future e2e spec — is invisible unless
+  // a pattern matches it, because TypeScript only follows imports from listed roots.
+  // src/ is excluded because tsconfig.app.json owns it (DOM lib + jsx).
+  "include": ["*.ts"],
+  "exclude": ["node_modules", "dist", "src", "server"]
 }

@@ -79,26 +79,31 @@ miscRouter.get('/dashboard', async (req, res) => {
     sumAmount({ ...notDeleted, created_at: { gte: month_start } }),
   ]);
 
-  // Admin reads the pre-aggregated matview (cheap regardless of table size); a caller's own
-  // scope is small enough to aggregate live. Matviews cannot carry RLS and are not Prisma
-  // models, so they stay raw — and stay behind this admin branch for that reason.
-  let leadStatusBreakdown: { status: string; count: number }[];
-  if (admin) {
-    leadStatusBreakdown = await prisma.$queryRaw`
-      SELECT status, SUM(lead_count)::int AS count FROM mv_lead_status_breakdown GROUP BY status
-    `;
-  } else {
-    const grouped = await db.leads.groupBy({
-      by: ['status'],
-      where: notDeleted,
-      _count: { _all: true },
-    });
-    leadStatusBreakdown = grouped.map((g) => ({ status: g.status, count: g._count._all }));
-  }
+  // Aggregated live for BOTH roles, from the same query.
+  //
+  // This used to read mv_lead_status_breakdown for admins, which made the dashboard
+  // contradict itself: totalLeads above is counted live, so between a write and the
+  // scheduler's next refresh (every 5 minutes) an admin saw a breakdown that did not sum to
+  // the total they were shown beside it. Callers never had the problem because their branch
+  // was already live.
+  //
+  // The scoping extension supplies the role difference — {} for an admin, own-leads for a
+  // caller — so one query serves both and there is no second code path to keep in step.
+  const grouped = await db.leads.groupBy({
+    by: ['status'],
+    where: notDeleted,
+    _count: { _all: true },
+  });
+  const leadStatusBreakdown = grouped.map((g) => ({ status: g.status, count: g._count._all }));
 
   let callerPerformance: unknown[] = [];
   let salesByCaller: unknown[] = [];
   if (admin) {
+    // Live, for the same reason as the breakdown above: this used to read
+    // mv_caller_performance and so lagged the rest of the dashboard by up to 5 minutes.
+    // Mirrors that matview's definition for the three fields the API actually returns —
+    // COALESCE to 0 falls out of the LEFT JOIN, and conversion_rate stays NULL rather than
+    // 0/0 via NULLIF, which the mapper below already coerces.
     const perf = await prisma.$queryRaw<
       {
         caller_id: string;
@@ -107,7 +112,20 @@ miscRouter.get('/dashboard', async (req, res) => {
         converted_leads: number;
         conversion_rate: string | null;
       }[]
-    >`SELECT * FROM mv_caller_performance ORDER BY total_assigned_leads DESC`;
+    >`
+      SELECT u.id AS caller_id, u.name AS caller_name,
+             count(l.id)                                          AS total_assigned_leads,
+             count(l.id) FILTER (WHERE l.status = 'converted')     AS converted_leads,
+             round(
+               count(l.id) FILTER (WHERE l.status = 'converted')::numeric
+               / NULLIF(count(l.id), 0)::numeric, 4
+             )                                                     AS conversion_rate
+      FROM users u
+      LEFT JOIN leads l ON l.assigned_caller_id = u.id AND l.deleted_at IS NULL
+      WHERE u.role = 'caller' AND u.deleted_at IS NULL
+      GROUP BY u.id, u.name
+      ORDER BY total_assigned_leads DESC
+    `;
     callerPerformance = perf.map((r) => ({
       id: r.caller_id,
       name: r.caller_name,

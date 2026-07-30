@@ -64,7 +64,8 @@ server/
     routes/           — one router per resource
     prisma/schema.prisma — introspected, hand-curated; NOT the schema source of truth
   scripts/
-    verify_scoped_prisma.ts — asserts scope injection + the write guard actually hold
+    build-test-db.ts  — rebuilds medcrm_test from schema + migrations + shifted seed
+    reset-test-data.ts — restores the dev DB to a clean baseline
     dev-setup.ts      — resets seed users' bcrypt hashes, refreshes matviews
     clean_test_leads.ts — deletes leads matching known test-data name patterns
 src/

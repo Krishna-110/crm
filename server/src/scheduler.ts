@@ -9,6 +9,14 @@ const ONE_DAY = 24 * 60 * 60 * 1000;
 // and only logged a warning, so nothing refreshes matviews/partitions/sessions unless
 // this process does it.
 
+// NOTE: /api/dashboard no longer reads either of these. Both were served to admins from the
+// matview while totalLeads was counted live, so the dashboard contradicted itself for up to
+// one refresh interval; routes/misc.ts now aggregates both live for every role.
+//
+// The refresh is kept so the views stay truthful for ad-hoc reporting and so they are ready
+// if the live aggregation ever becomes too expensive — a matview that nothing refreshes is a
+// worse trap than one nothing reads, because the next person to query it gets stale numbers
+// with no indication. If they are dropped, drop this with them.
 async function refreshDashboards() {
   await maintPool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_lead_status_breakdown');
   await maintPool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY mv_caller_performance');

@@ -22,6 +22,12 @@ Migrations run **after** seed.sql. `001` initializes the order-number sequence p
 already present; `002` converts the workflow enums to lookup tables (the seed's enum values are
 carried over as lookup rows). On a fresh DB with no seed, skip step 2 — the rest is unchanged.
 
+> **Demo logins work straight from the seed.** `seed.sql` contains real bcrypt digests for
+> `admin123` (the three admin accounts) and `caller123` (the five caller accounts). They were
+> previously placeholders that only looked like bcrypt strings, so a database built by
+> following these steps could not be logged into at all.
+> `kavya.reddy@medicrm.in` is seeded **inactive** on purpose, for negative-login testing.
+>
 > The seed uses values that satisfy the constraints in every migration state, so it can load
 > before the migrations. Only the order-number **sequence** cares about ordering, which is why
 > `001` runs after `seed.sql`.

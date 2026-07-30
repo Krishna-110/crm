@@ -1,0 +1,24 @@
+{
+  // Exhaustive typecheck for the whole package. Checks only — never emits.
+  //
+  // tsconfig.json is an ALLOWLIST (`src`, `scripts`) because it drives `npm run build` and
+  // therefore controls what lands in dist/. That is correct for emit and wrong for
+  // checking: anything not enumerated is invisible.
+  //
+  // TypeScript does follow imports, so a file reachable from src/ is checked even when it
+  // is not listed. The genuinely invisible category is ENTRY POINTS that nothing imports —
+  // which is precisely what test files are. tests/ sat outside type coverage entirely for
+  // that reason, and an `activity_type: 'note'` that is not in the enum reached a passing
+  // test as a result.
+  //
+  // So this config inverts the rule: include everything, exclude only what is generated.
+  // A new folder — e2e/, jobs/, another scripts dir — is covered the day it is created,
+  // instead of reintroducing the same gap under a different name.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["vitest/globals", "node"]
+  },
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

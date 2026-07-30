@@ -29,15 +29,20 @@ BEGIN;
 -- =====================================================================================
 -- USERS (8): 3 admin, 5 caller
 -- =====================================================================================
+-- Password hashes below are REAL bcrypt digests of the documented demo credentials:
+--   admin  -> admin123      caller -> caller123
+-- They were placeholders that merely looked like bcrypt strings, so a database installed
+-- per db/README.md could not be logged into at all; server/scripts/dev-setup.ts existed
+-- largely to paper over that. DEMO ONLY — never ship these to a real deployment.
 INSERT INTO users (id, employee_id, name, phone, email, password_hash, role, status, last_login_at, created_at, updated_at) VALUES
-('10000000-0000-0000-0000-000000000001','EMP001','Aarav Sharma','+91 98100 11111','aarav.sharma@medicrm.in','$2b$12$KIXQJz8yZ1v9y7f2b0aQeuG5m8i1vJcQwG1nE7yq3Zt4b9r2xL9Sa','admin','active','2026-07-15 08:12:00+05:30','2025-01-10 09:00:00+05:30','2026-07-15 08:12:00+05:30'),
-('10000000-0000-0000-0000-000000000002','EMP002','Priya Mehta','+91 98100 22222','priya.mehta@medicrm.in','$2b$12$aB3dE6fG9hJ2kL5mN8pQreuvW1xY4zA7bC0dE3fG6hJ9kL2mN5pQr','admin','active','2026-07-15 07:45:00+05:30','2025-02-01 09:00:00+05:30','2026-07-15 07:45:00+05:30'),
-('10000000-0000-0000-0000-000000000003','EMP003','Rohan Kapoor','+91 98100 33333','rohan.kapoor@medicrm.in','$2b$12$mN5pQrsT8uV1wX4yZ7aB0cDeuFgH3iJ6kL9mN2pQrsT5uV8wX1yZ4','admin','active','2026-07-14 18:20:00+05:30','2025-02-15 09:00:00+05:30','2026-07-14 18:20:00+05:30'),
-('10000000-0000-0000-0000-000000000004','EMP004','Sneha Iyer','+91 98200 44444','sneha.iyer@medicrm.in','$2b$12$wX1yZ4aB7cD0eFgH3iJ6kLmNopQrsT9uV2wX5yZ8aB1cD4eFgH7iJ','caller','active','2026-07-15 09:05:00+05:30','2025-03-01 09:00:00+05:30','2026-07-15 09:05:00+05:30'),
-('10000000-0000-0000-0000-000000000005','EMP005','Vikram Singh','+91 98200 55555','vikram.singh@medicrm.in','$2b$12$eFgH3iJ6kL9mNopQrsT2uV5wX8yZ1aB4cD7eFgH0iJ3kL6mNopQrsT','caller','active','2026-07-15 09:10:00+05:30','2025-03-10 09:00:00+05:30','2026-07-15 09:10:00+05:30'),
-('10000000-0000-0000-0000-000000000006','EMP006','Ananya Desai','+91 98200 66666','ananya.desai@medicrm.in','$2b$12$iJ6kL9mNopQrsT2uV5wX8yZ1aB4cD7eFgH0iJ3kL6mNopQrsT9uV2w','caller','active','2026-07-15 08:55:00+05:30','2025-04-01 09:00:00+05:30','2026-07-15 08:55:00+05:30'),
-('10000000-0000-0000-0000-000000000007','EMP007','Arjun Nair','+91 98200 77777','arjun.nair@medicrm.in','$2b$12$mNopQrsT2uV5wX8yZ1aB4cD7eFgH0iJ3kL6mNopQrsT9uV2wX5yZ8aB','caller','active','2026-07-13 17:30:00+05:30','2025-04-15 09:00:00+05:30','2026-07-13 17:30:00+05:30'),
-('10000000-0000-0000-0000-000000000008','EMP008','Kavya Reddy','+91 98200 88888','kavya.reddy@medicrm.in','$2b$12$rsT2uV5wX8yZ1aB4cD7eFgH0iJ3kL6mNopQrsT9uV2wX5yZ8aB1cD4e','caller','inactive','2026-06-20 12:00:00+05:30','2025-05-01 09:00:00+05:30','2026-06-20 12:00:00+05:30');
+('10000000-0000-0000-0000-000000000001','EMP001','Aarav Sharma','+91 98100 11111','aarav.sharma@medicrm.in','$2a$10$b6Cix88apb1tbmlgEmq0COMTs1DMdR7I8C2iyI385iBxZVlNNWqN2','admin','active','2026-07-15 08:12:00+05:30','2025-01-10 09:00:00+05:30','2026-07-15 08:12:00+05:30'),
+('10000000-0000-0000-0000-000000000002','EMP002','Priya Mehta','+91 98100 22222','priya.mehta@medicrm.in','$2a$10$b6Cix88apb1tbmlgEmq0COMTs1DMdR7I8C2iyI385iBxZVlNNWqN2','admin','active','2026-07-15 07:45:00+05:30','2025-02-01 09:00:00+05:30','2026-07-15 07:45:00+05:30'),
+('10000000-0000-0000-0000-000000000003','EMP003','Rohan Kapoor','+91 98100 33333','rohan.kapoor@medicrm.in','$2a$10$b6Cix88apb1tbmlgEmq0COMTs1DMdR7I8C2iyI385iBxZVlNNWqN2','admin','active','2026-07-14 18:20:00+05:30','2025-02-15 09:00:00+05:30','2026-07-14 18:20:00+05:30'),
+('10000000-0000-0000-0000-000000000004','EMP004','Sneha Iyer','+91 98200 44444','sneha.iyer@medicrm.in','$2a$10$gNhwFSKEppSwk2o1DZxOIekQUVP6oeYxp5zWSRkgxLdLu44CY.09O','caller','active','2026-07-15 09:05:00+05:30','2025-03-01 09:00:00+05:30','2026-07-15 09:05:00+05:30'),
+('10000000-0000-0000-0000-000000000005','EMP005','Vikram Singh','+91 98200 55555','vikram.singh@medicrm.in','$2a$10$gNhwFSKEppSwk2o1DZxOIekQUVP6oeYxp5zWSRkgxLdLu44CY.09O','caller','active','2026-07-15 09:10:00+05:30','2025-03-10 09:00:00+05:30','2026-07-15 09:10:00+05:30'),
+('10000000-0000-0000-0000-000000000006','EMP006','Ananya Desai','+91 98200 66666','ananya.desai@medicrm.in','$2a$10$gNhwFSKEppSwk2o1DZxOIekQUVP6oeYxp5zWSRkgxLdLu44CY.09O','caller','active','2026-07-15 08:55:00+05:30','2025-04-01 09:00:00+05:30','2026-07-15 08:55:00+05:30'),
+('10000000-0000-0000-0000-000000000007','EMP007','Arjun Nair','+91 98200 77777','arjun.nair@medicrm.in','$2a$10$gNhwFSKEppSwk2o1DZxOIekQUVP6oeYxp5zWSRkgxLdLu44CY.09O','caller','active','2026-07-13 17:30:00+05:30','2025-04-15 09:00:00+05:30','2026-07-13 17:30:00+05:30'),
+('10000000-0000-0000-0000-000000000008','EMP008','Kavya Reddy','+91 98200 88888','kavya.reddy@medicrm.in','$2a$10$gNhwFSKEppSwk2o1DZxOIekQUVP6oeYxp5zWSRkgxLdLu44CY.09O','caller','inactive','2026-06-20 12:00:00+05:30','2025-05-01 09:00:00+05:30','2026-06-20 12:00:00+05:30');
 
 
 -- =====================================================================================
