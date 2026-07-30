@@ -140,6 +140,12 @@ function appReducer(state: AppState, action: AppAction): AppState {
         ),
       };
 
+    case 'DELETE_RENEWAL':
+      return {
+        ...state,
+        renewals: state.renewals.filter((renewal) => renewal.id !== action.payload.id),
+      };
+
     case 'ADD_FOLLOW_UP':
       return { ...state, followUps: [action.payload.followUp, ...state.followUps] };
 
@@ -178,6 +184,16 @@ function appReducer(state: AppState, action: AppAction): AppState {
         leads: state.leads.map((lead) =>
           lead.id === action.payload.leadId
             ? { ...lead, activities: [action.payload.activity, ...(lead.activities || [])] }
+            : lead,
+        ),
+      };
+
+    case 'ADD_LEAD_MEDICINE':
+      return {
+        ...state,
+        leads: state.leads.map((lead) =>
+          lead.id === action.payload.leadId
+            ? { ...lead, medicines: [...lead.medicines, action.payload.medicine] }
             : lead,
         ),
       };

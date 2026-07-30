@@ -27,6 +27,8 @@ export async function fetchOrderById(client: pg.PoolClient, id: string) {
 const ORDER_FIELD_MAP: Record<string, string> = {
   stage: 'stage',
   paymentStatus: 'payment_status',
+  discountType: 'discount_type',
+  discountValue: 'discount_value',
 };
 
 ordersRouter.get('/', async (req, res) => {

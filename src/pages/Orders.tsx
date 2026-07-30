@@ -8,6 +8,7 @@ import {
 import { useApp } from '@/context/AppContext'
 import { ordersApi } from '@/api/orders'
 import { emitToast } from '@/lib/toast'
+import { formatIndianDate } from '@/lib/dateUtils'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
@@ -17,7 +18,13 @@ import { Tabs } from '@/components/ui/Tabs'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { OrderStageBadge } from '@/components/ui/StatusBadge'
-import type { Order, OrderStage, PaymentStatus } from '@/types'
+import type { DiscountType, Order, OrderStage, PaymentStatus } from '@/types'
+
+const DISCOUNT_LABEL: Record<DiscountType, string> = {
+  none: 'No discount',
+  flat: 'Flat ₹ off',
+  percentage: '% off',
+}
 
 const STAGES: { key: OrderStage; label: string; dot: string; accent: string }[] = [
   { key: 'lead', label: 'Lead', dot: 'bg-ink-400', accent: 'bg-ink-400' },
@@ -65,6 +72,8 @@ export function Orders() {
   const [activeTab, setActiveTab] = useState('all')
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [detailOpen, setDetailOpen] = useState(false)
+  const [discountForm, setDiscountForm] = useState<{ type: DiscountType; value: string }>({ type: 'none', value: '0' })
+  const [savingDiscount, setSavingDiscount] = useState(false)
 
   const orders = state.orders ?? []
 
@@ -126,7 +135,36 @@ export function Orders() {
 
   function openDetail(order: Order) {
     setSelectedOrder(order)
+    setDiscountForm({ type: order.discountType, value: String(order.discountValue) })
     setDetailOpen(true)
+  }
+
+  async function handleApplyDiscount() {
+    if (!selectedOrder) return
+    const value = Number(discountForm.value)
+    if (discountForm.type !== 'none' && (!Number.isFinite(value) || value < 0)) {
+      emitToast('Enter a discount value of 0 or more')
+      return
+    }
+    if (discountForm.type === 'percentage' && value > 100) {
+      emitToast('A percentage discount cannot exceed 100')
+      return
+    }
+    setSavingDiscount(true)
+    try {
+      const updated = await ordersApi.update(selectedOrder.id, {
+        discountType: discountForm.type,
+        discountValue: discountForm.type === 'none' ? 0 : value,
+      })
+      dispatch({ type: 'UPDATE_ORDER', payload: { id: updated.id, updates: updated } })
+      setSelectedOrder(updated)
+      setDiscountForm({ type: updated.discountType, value: String(updated.discountValue) })
+      emitToast('Discount applied', 'success')
+    } catch (err) {
+      emitToast(err instanceof Error ? err.message : 'Failed to apply discount')
+    } finally {
+      setSavingDiscount(false)
+    }
   }
 
   function closeDetail() {
@@ -225,8 +263,11 @@ export function Orders() {
                           <span className="text-ink-400">--</span>
                         )}
                       </td>
-                      <td className="px-3 py-3.5 whitespace-nowrap font-semibold text-ink-900">
-                        {formatIndianCurrency(order.totalAmount)}
+                      <td className="px-3 py-3.5 whitespace-nowrap">
+                        <div className="font-semibold text-ink-900">{formatIndianCurrency(order.payableAmount)}</div>
+                        {order.discountType !== 'none' && (
+                          <div className="text-[11px] text-ink-400 line-through">{formatIndianCurrency(order.totalAmount)}</div>
+                        )}
                       </td>
                       <td className="px-3 py-3.5">
                         <Badge variant={getPaymentBadgeVariant(order.paymentStatus)}>
@@ -237,11 +278,7 @@ export function Orders() {
                         <OrderStageBadge stage={order.stage} />
                       </td>
                       <td className="px-3 py-3.5 whitespace-nowrap text-xs text-ink-500">
-                        {new Date(order.createdDate).toLocaleDateString('en-IN', {
-                          day: '2-digit',
-                          month: 'short',
-                          year: 'numeric',
-                        })}
+                        {formatIndianDate(order.createdDate)}
                       </td>
                       <td className="px-3 py-3.5">
                         <div className="flex items-center gap-1">
@@ -357,15 +394,69 @@ export function Orders() {
                   </tbody>
                   <tfoot>
                     <tr className="border-t border-ink-200 bg-ink-50/50">
+                      <td colSpan={3} className="px-3 py-2 text-right text-ink-600">
+                        Subtotal
+                      </td>
+                      <td className="px-3 py-2 text-right font-medium text-ink-800">
+                        {formatIndianCurrency(selectedOrder.totalAmount)}
+                      </td>
+                    </tr>
+                    {selectedOrder.discountType !== 'none' && (
+                      <tr className="bg-ink-50/50">
+                        <td colSpan={3} className="px-3 py-2 text-right text-danger-600">
+                          Discount ({selectedOrder.discountType === 'percentage' ? `${selectedOrder.discountValue}%` : formatIndianCurrency(selectedOrder.discountValue)})
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium text-danger-600">
+                          -{formatIndianCurrency(selectedOrder.totalAmount - selectedOrder.payableAmount)}
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="border-t border-ink-200 bg-ink-50/50">
                       <td colSpan={3} className="px-3 py-2.5 text-right font-medium text-ink-700">
-                        Total
+                        Payable Total
                       </td>
                       <td className="px-3 py-2.5 text-right font-bold text-ink-900">
-                        {formatIndianCurrency(selectedOrder.totalAmount)}
+                        {formatIndianCurrency(selectedOrder.payableAmount)}
                       </td>
                     </tr>
                   </tfoot>
                 </table>
+              </div>
+            </div>
+
+            {/* Discount */}
+            <div className="border-t border-ink-200 pt-4">
+              <p className="mb-2 text-xs uppercase tracking-wide text-ink-500">Discount</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div>
+                  <label className="field-label">Type</label>
+                  <select
+                    value={discountForm.type}
+                    onChange={(e) => setDiscountForm((f) => ({ ...f, type: e.target.value as DiscountType }))}
+                    className="field-input w-auto"
+                  >
+                    {(Object.keys(DISCOUNT_LABEL) as DiscountType[]).map((type) => (
+                      <option key={type} value={type}>{DISCOUNT_LABEL[type]}</option>
+                    ))}
+                  </select>
+                </div>
+                {discountForm.type !== 'none' && (
+                  <div>
+                    <label className="field-label">{discountForm.type === 'percentage' ? 'Percent (0-100)' : 'Amount (₹)'}</label>
+                    <input
+                      type="number"
+                      min={0}
+                      max={discountForm.type === 'percentage' ? 100 : undefined}
+                      step="0.01"
+                      value={discountForm.value}
+                      onChange={(e) => setDiscountForm((f) => ({ ...f, value: e.target.value }))}
+                      className="field-input w-32"
+                    />
+                  </div>
+                )}
+                <Button variant="secondary" loading={savingDiscount} onClick={handleApplyDiscount}>
+                  Apply Discount
+                </Button>
               </div>
             </div>
 

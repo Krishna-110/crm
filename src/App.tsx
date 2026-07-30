@@ -9,7 +9,7 @@ import { Users } from '@/pages/Users'
 import { Calendar } from '@/pages/Calendar'
 import { Orders } from '@/pages/Orders'
 import { Renewals } from '@/pages/Renewals'
-import { Medicines } from '@/pages/Medicines'
+import { Stock } from '@/pages/Stock'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { ToastContainer } from '@/components/ui/Toast'
 
@@ -48,7 +48,7 @@ export function App() {
           <Route path="/calendar" element={<Calendar />} />
           <Route path="/orders" element={<Orders />} />
           <Route path="/renewals" element={<Renewals />} />
-          <Route path="/medicines" element={<Medicines />} />
+          <Route path="/stock" element={<Stock />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

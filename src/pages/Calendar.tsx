@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, Phone, Bell, RotateCcw, Eye, CheckCircle2, C
 import { useApp } from '@/context/AppContext'
 import { followUpsApi } from '@/api/followUps'
 import { emitToast } from '@/lib/toast'
+import { formatIndianDate } from '@/lib/dateUtils'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { Card, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
@@ -305,7 +306,7 @@ export function Calendar() {
               <Card>
                 <CardBody>
                   <h3 className="text-sm font-semibold text-ink-900 mb-3">
-                    Follow-ups for {selectedDay}
+                    Follow-ups for {formatIndianDate(selectedDay)}
                   </h3>
                   {(followUpsByDate[selectedDay] ?? []).length === 0 ? (
                     <EmptyState
@@ -427,7 +428,7 @@ export function Calendar() {
       <div className="max-w-2xl mx-auto space-y-4">
         <div className={`rounded-xl border p-4 text-center
           ${today ? 'border-primary-200 bg-primary-50/50' : 'border-ink-200 bg-ink-50/50'}`}>
-          <p className="text-lg font-semibold text-ink-900">{currentDate}</p>
+          <p className="text-lg font-semibold text-ink-900">{formatIndianDate(currentDate, 'full')}</p>
           <p className="text-sm text-ink-500">{dayFollowUps.length} follow-up{dayFollowUps.length !== 1 ? 's' : ''}</p>
         </div>
 
@@ -468,7 +469,7 @@ export function Calendar() {
                         {f.notes && (
                           <p className="text-sm text-ink-500">{f.notes}</p>
                         )}
-                        <p className="text-xs text-ink-400">Scheduled: {f.scheduledDate}</p>
+                        <p className="text-xs text-ink-400">Scheduled: {formatIndianDate(f.scheduledDate)}</p>
                       </div>
                     </div>
                     {f.status !== 'completed' && (
@@ -538,8 +539,8 @@ export function Calendar() {
           </button>
           <h2 className="min-w-48 text-center text-lg font-semibold text-ink-900">
             {viewMode === 'monthly' ? monthLabel :
-             viewMode === 'weekly' ? `Week of ${weekDates[0]}` :
-             currentDate}
+             viewMode === 'weekly' ? `Week of ${formatIndianDate(weekDates[0])}` :
+             formatIndianDate(currentDate)}
           </h2>
           <button
             className="rounded-lg border border-ink-200 p-2 text-ink-500 transition-colors hover:bg-ink-100"

@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useApp } from '@/context/AppContext'
 import { leadsApi } from '@/api/leads'
 import { emitToast } from '@/lib/toast'
-import type { LeadActivity, LeadPriority } from '@/types'
+import { formatIndianDate, formatIndianDateTime } from '@/lib/dateUtils'
+import type { LeadActivity, LeadStatus } from '@/types'
 import { Card, CardHeader, CardBody } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -24,13 +25,6 @@ import {
   Pill,
 } from 'lucide-react'
 
-const priorityBadgeVariant: Record<LeadPriority, 'default' | 'primary' | 'warning' | 'danger'> = {
-  low: 'default',
-  medium: 'primary',
-  high: 'warning',
-  urgent: 'danger',
-}
-
 const activityIconMap: Record<LeadActivity['type'], typeof Phone> = {
   call: Phone,
   comment: MessageSquare,
@@ -49,6 +43,19 @@ const activityColorMap: Record<LeadActivity['type'], string> = {
   created: 'bg-ink-100 text-ink-600',
 }
 
+// 'converted' is deliberately excluded — that transition only happens through
+// "Convert to Order" (which also creates the order), not a plain status edit.
+const editableStatusOptions: { value: LeadStatus; label: string }[] = [
+  { value: 'new', label: 'New' },
+  { value: 'contacted', label: 'Contacted' },
+  { value: 'follow_up_pending', label: 'Follow-up Pending' },
+  { value: 'interested', label: 'Interested' },
+  { value: 'call_back_later', label: 'Call Back Later' },
+  { value: 'no_response', label: 'No Response' },
+  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'sold', label: 'Sold' },
+]
+
 const sourceLabel: Record<string, string> = {
   website: 'Website',
   referral: 'Referral',
@@ -65,6 +72,9 @@ export function LeadDetailPage() {
   const { state, dispatch } = useApp()
   const [comment, setComment] = useState('')
   const [showConvertConfirm, setShowConvertConfirm] = useState(false)
+  const [showMedicineFields, setShowMedicineFields] = useState(false)
+  const [medicineName, setMedicineName] = useState('')
+  const [medicineDays, setMedicineDays] = useState('30')
 
   const lead = state.leads.find(l => l.id === id)
 
@@ -94,12 +104,50 @@ export function LeadDetailPage() {
 
   async function handleAddComment() {
     if (!comment.trim() || !lead) return
+
+    let medicine: { name: string; days: number } | undefined
+    if (showMedicineFields) {
+      if (!medicineName.trim()) {
+        emitToast('Enter a medicine name, or turn off "Add medicine"')
+        return
+      }
+      const days = Number(medicineDays)
+      if (!Number.isInteger(days) || days <= 0) {
+        emitToast('Days must be a whole number greater than 0')
+        return
+      }
+      medicine = { name: medicineName.trim(), days }
+    }
+
     try {
-      const activity = await leadsApi.addActivity(lead.id, comment.trim())
-      dispatch({ type: 'ADD_LEAD_ACTIVITY', payload: { leadId: lead.id, activity } })
+      const result = await leadsApi.addActivity(lead.id, comment.trim(), medicine)
+      dispatch({ type: 'ADD_LEAD_ACTIVITY', payload: { leadId: lead.id, activity: result.activity } })
+      if (result.medicine) {
+        dispatch({ type: 'ADD_LEAD_MEDICINE', payload: { leadId: lead.id, medicine: result.medicine } })
+      }
       setComment('')
+      setMedicineName('')
+      setMedicineDays('30')
+      setShowMedicineFields(false)
     } catch (err) {
       emitToast(err instanceof Error ? err.message : 'Failed to add comment')
+    }
+  }
+
+  async function handleStatusChange(status: LeadStatus) {
+    if (!lead || status === lead.status) return
+    if (status === 'sold') {
+      if (!lead.address?.trim() || !lead.pincode?.trim() || !lead.paymentScreenshot?.trim()) {
+        emitToast('Address, Pincode, and Payment Screenshot are required when Lead Status is Sold. Redirecting to edit...', 'info')
+        navigate('/leads', { state: { editLeadId: lead.id } })
+        return
+      }
+    }
+    try {
+      const updated = await leadsApi.update(lead.id, { status })
+      dispatch({ type: 'UPDATE_LEAD', payload: { id: updated.id, updates: updated } })
+    } catch (err) {
+      emitToast(err instanceof Error ? err.message : 'Failed to update status')
     }
   }
 
@@ -151,10 +199,22 @@ export function LeadDetailPage() {
             <h1 className="text-[22px] font-bold tracking-tight text-ink-900">{lead.customerName}</h1>
             <p className="text-sm text-ink-500 mt-1">{lead.mobile}</p>
             <div className="flex items-center gap-2 mt-2">
-              <LeadStatusBadge status={lead.status} />
-              <Badge variant={priorityBadgeVariant[lead.priority]}>
-                {lead.priority.charAt(0).toUpperCase() + lead.priority.slice(1)} Priority
-              </Badge>
+              {lead.status === 'converted' ? (
+                <LeadStatusBadge status={lead.status} />
+              ) : (
+                <select
+                  value={lead.status}
+                  onChange={e => handleStatusChange(e.target.value as LeadStatus)}
+                  className="rounded-full border border-ink-200 bg-white py-1 pl-3 pr-7 text-xs font-medium text-ink-700 outline-none transition-colors hover:border-ink-300 focus:border-primary-400"
+                  title="Change Lead Status"
+                >
+                  {editableStatusOptions.map(o => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
           </div>
         </div>
@@ -163,7 +223,7 @@ export function LeadDetailPage() {
             variant="secondary"
             size="sm"
             icon={<Edit2 size={14} />}
-            onClick={() => navigate('/leads')}
+            onClick={() => navigate('/leads', { state: { editLeadId: lead.id } })}
           >
             Edit
           </Button>
@@ -207,11 +267,30 @@ export function LeadDetailPage() {
                   value={`${lead.address}, ${lead.city}, ${lead.state} - ${lead.pincode}`}
                 />
                 <InfoRow label="Doctor Name" value={lead.doctorName ?? '-'} />
+                <InfoRow label="Disease" value={lead.disease ?? '-'} />
                 <InfoRow label="Lead Source" value={sourceLabel[lead.leadSource] ?? lead.leadSource} />
-                <InfoRow label="Created Date" value={lead.createdDate} />
+                <InfoRow label="Created Date" value={formatIndianDate(lead.createdDate)} />
               </div>
             </CardBody>
           </Card>
+
+          {/* Payment Screenshot Card if available */}
+          {lead.paymentScreenshot && (
+            <Card>
+              <CardHeader>
+                <h2 className="text-[15px] font-semibold text-ink-900">Payment Screenshot</h2>
+              </CardHeader>
+              <CardBody>
+                <div className="overflow-hidden rounded-xl border border-ink-200 bg-ink-50/50 p-2 max-w-sm">
+                  <img
+                    src={lead.paymentScreenshot}
+                    alt="Payment Confirmation Screenshot"
+                    className="max-h-64 rounded-lg object-contain w-full"
+                  />
+                </div>
+              </CardBody>
+            </Card>
+          )}
 
           {/* Medicines Required */}
           <Card>
@@ -248,10 +327,24 @@ export function LeadDetailPage() {
             </CardHeader>
             <CardBody>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-4 gap-x-8">
-                <InfoRow label="Last Follow-up" value={lead.lastFollowUp ?? '-'} />
-                <InfoRow label="Next Follow-up" value={lead.nextFollowUp ?? '-'} />
+                <InfoRow label="Last Follow-up" value={formatIndianDate(lead.lastFollowUp)} />
+                <InfoRow label="Next Follow-up" value={formatIndianDate(lead.nextFollowUp)} />
                 <InfoRow label="Assigned Caller" value={getCallerName(lead.assignedCaller)} />
               </div>
+            </CardBody>
+          </Card>
+
+          {/* Notes */}
+          <Card>
+            <CardHeader>
+              <h2 className="text-[15px] font-semibold text-ink-900">Notes</h2>
+            </CardHeader>
+            <CardBody>
+              {lead.notes ? (
+                <p className="text-sm text-ink-700 whitespace-pre-wrap">{lead.notes}</p>
+              ) : (
+                <p className="text-sm text-ink-400">No notes for this lead.</p>
+              )}
             </CardBody>
           </Card>
 
@@ -268,6 +361,41 @@ export function LeadDetailPage() {
                 placeholder="Write a comment about this lead..."
                 className="field-input resize-none"
               />
+
+              <button
+                type="button"
+                onClick={() => setShowMedicineFields(v => !v)}
+                className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary-600 hover:text-primary-700"
+              >
+                <Plus size={15} className={`transition-transform ${showMedicineFields ? 'rotate-45' : ''}`} />
+                {showMedicineFields ? 'Remove medicine' : 'Add medicine'}
+              </button>
+
+              {showMedicineFields && (
+                <div className="mt-3 flex items-start gap-2 rounded-xl border border-ink-100 bg-ink-50/50 p-3">
+                  <div className="flex-1">
+                    <label className="field-label">Medicine Name</label>
+                    <input
+                      type="text"
+                      value={medicineName}
+                      onChange={e => setMedicineName(e.target.value)}
+                      placeholder="e.g. Metformin 500mg"
+                      className="field-input"
+                    />
+                  </div>
+                  <div className="w-28">
+                    <label className="field-label">Days</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={medicineDays}
+                      onChange={e => setMedicineDays(e.target.value)}
+                      className="field-input"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="flex justify-end mt-3">
                 <Button size="sm" onClick={handleAddComment} disabled={!comment.trim()}>
                   Add Comment
@@ -367,16 +495,5 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 }
 
 function formatTimestamp(iso: string): string {
-  try {
-    const d = new Date(iso)
-    return d.toLocaleDateString('en-IN', {
-      day: 'numeric',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  } catch {
-    return iso
-  }
+  return formatIndianDateTime(iso)
 }

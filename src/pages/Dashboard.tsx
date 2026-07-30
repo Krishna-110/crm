@@ -9,6 +9,9 @@ import {
   TrendingUp,
   TrendingDown,
   ArrowUpRight,
+  CalendarRange,
+  IndianRupee,
+  BarChart3,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
 import { Card } from '@/components/ui/Card'
@@ -17,14 +20,52 @@ import { LeadStatusBadge } from '@/components/ui/StatusBadge'
 import { PageHeader } from '@/components/ui/PageHeader'
 import type { LeadStatus } from '@/types'
 
-const MONTHLY_ORDERS_DATA = [
-  { month: 'Feb', value: 8 },
-  { month: 'Mar', value: 12 },
-  { month: 'Apr', value: 15 },
-  { month: 'May', value: 10 },
-  { month: 'Jun', value: 18 },
-  { month: 'Jul', value: 22 },
-]
+function formatRupees(amount: number) {
+  return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
+}
+
+// Reused for both the Leads and Sales period breakdown cards below — same shape (Today /
+// This Week / This Month), differing only in icon/tint/value-formatting.
+function PeriodBreakdown({
+  icon: Icon,
+  tint,
+  title,
+  today,
+  thisWeek,
+  thisMonth,
+  format = String,
+}: {
+  icon: typeof Users
+  tint: string
+  title: string
+  today: number
+  thisWeek: number
+  thisMonth: number
+  format?: (n: number) => string
+}) {
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center gap-2.5 px-5 pt-4">
+        <div className={`flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br ${tint}`}>
+          <Icon className="h-4 w-4 text-white" />
+        </div>
+        <h2 className="text-[15px] font-semibold text-ink-900">{title}</h2>
+      </div>
+      <div className="grid grid-cols-3 divide-x divide-ink-100 px-5 py-4">
+        {[
+          { label: 'Today', value: today },
+          { label: 'This Week', value: thisWeek },
+          { label: 'This Month', value: thisMonth },
+        ].map((row) => (
+          <div key={row.label} className="px-2 text-center first:pl-0 last:pr-0">
+            <p className="truncate text-xl font-bold tracking-tight text-ink-900">{format(row.value)}</p>
+            <p className="mt-0.5 text-[11px] text-ink-500">{row.label}</p>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
 
 const STATUS_BAR: Record<LeadStatus, string> = {
   new: 'bg-sky-500',
@@ -35,7 +76,7 @@ const STATUS_BAR: Record<LeadStatus, string> = {
   no_response: 'bg-ink-400',
   not_interested: 'bg-danger-500',
   converted: 'bg-success-500',
-  closed: 'bg-ink-600',
+  sold: 'bg-emerald-600',
 }
 
 const STATUS_LABELS: Record<LeadStatus, string> = {
@@ -47,11 +88,8 @@ const STATUS_LABELS: Record<LeadStatus, string> = {
   no_response: 'No Response',
   not_interested: 'Not Interested',
   converted: 'Converted',
-  closed: 'Closed',
+  sold: 'Sold',
 }
-
-const priorityVariant = (p: string) =>
-  p === 'urgent' ? 'danger' : p === 'high' ? 'warning' : p === 'medium' ? 'primary' : 'default'
 
 export function Dashboard() {
   const { state } = useApp()
@@ -74,7 +112,9 @@ export function Dashboard() {
 
   const statusCountValues = Object.values(leadStatusCounts)
   const maxStatusCount = statusCountValues.length ? Math.max(...statusCountValues) : 1
-  const maxMonthly = Math.max(...MONTHLY_ORDERS_DATA.map((d) => d.value), 1)
+
+  const salesByCaller = dashboard?.salesByCaller ?? []
+  const maxCallerSales = Math.max(...salesByCaller.map((c) => c.totalSales), 1)
 
   const statCards = [
     { label: 'Total Leads', value: dashboard?.totalLeads ?? 0, icon: Users, tint: 'from-primary-500 to-primary-600', change: '+12%', positive: true },
@@ -89,17 +129,13 @@ export function Dashboard() {
     return state.users.find((u) => u.id === userId)?.name ?? '—'
   }
 
-  // SVG area chart geometry
-  const chartW = 480
-  const chartH = 170
-  const pad = 8
-  const points = MONTHLY_ORDERS_DATA.map((d, i) => {
-    const x = pad + (i * (chartW - pad * 2)) / (MONTHLY_ORDERS_DATA.length - 1)
-    const y = chartH - pad - (d.value / maxMonthly) * (chartH - pad * 2)
-    return { x, y, ...d }
-  })
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ')
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${chartH - pad} L ${points[0].x} ${chartH - pad} Z`
+  // Bar chart geometry — Sales by Caller
+  const barChartW = 480
+  const barChartH = 170
+  const barGap = 12
+  const barCount = Math.max(salesByCaller.length, 1)
+  const barSlot = (barChartW - barGap * (barCount - 1)) / barCount
+  const barWidth = Math.min(barSlot, 56)
 
   return (
     <div className="space-y-6">
@@ -133,6 +169,27 @@ export function Dashboard() {
         })}
       </div>
 
+      {/* Leads / Sales period breakdown */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <PeriodBreakdown
+          icon={CalendarRange}
+          tint="from-primary-500 to-primary-600"
+          title="Leads"
+          today={dashboard?.leadsByPeriod.today ?? 0}
+          thisWeek={dashboard?.leadsByPeriod.thisWeek ?? 0}
+          thisMonth={dashboard?.leadsByPeriod.thisMonth ?? 0}
+        />
+        <PeriodBreakdown
+          icon={IndianRupee}
+          tint="from-success-500 to-success-600"
+          title="Sales"
+          today={dashboard?.salesByPeriod.today ?? 0}
+          thisWeek={dashboard?.salesByPeriod.thisWeek ?? 0}
+          thisMonth={dashboard?.salesByPeriod.thisMonth ?? 0}
+          format={formatRupees}
+        />
+      </div>
+
       {/* Charts */}
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         {/* Lead Status Breakdown */}
@@ -164,33 +221,60 @@ export function Dashboard() {
           </div>
         </Card>
 
-        {/* Monthly Orders - SVG area chart */}
+        {/* Sales by Caller - SVG bar chart (admin only, mirrors Caller Performance's gating) */}
         <Card className="lg:col-span-2">
-          <div className="px-5 pt-5">
-            <h2 className="text-[15px] font-semibold text-ink-900">Monthly Orders</h2>
-            <p className="text-xs text-ink-500">Last 6 months</p>
+          <div className="flex items-center gap-2 px-5 pt-5">
+            <BarChart3 className="h-4 w-4 text-ink-400" />
+            <div>
+              <h2 className="text-[15px] font-semibold text-ink-900">Sales by Caller</h2>
+              <p className="text-xs text-ink-500">Total order value per caller</p>
+            </div>
           </div>
           <div className="px-2 pb-3 pt-4">
-            <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full" preserveAspectRatio="none" style={{ height: 180 }}>
-              <defs>
-                <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3b6df5" stopOpacity="0.25" />
-                  <stop offset="100%" stopColor="#3b6df5" stopOpacity="0" />
-                </linearGradient>
-              </defs>
-              <path d={areaPath} fill="url(#areaFill)" />
-              <path d={linePath} fill="none" stroke="#2451e6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
-              {points.map((p) => (
-                <g key={p.month}>
-                  <circle cx={p.x} cy={p.y} r="4" fill="#fff" stroke="#2451e6" strokeWidth="2.5" />
-                </g>
-              ))}
-            </svg>
-            <div className="flex justify-between px-4">
-              {MONTHLY_ORDERS_DATA.map((d) => (
-                <span key={d.month} className="text-[11px] font-medium text-ink-400">{d.month}</span>
-              ))}
-            </div>
+            {salesByCaller.length === 0 ? (
+              <p className="px-3 py-8 text-center text-sm text-ink-400">
+                {state.currentUser?.role === 'admin' ? 'No sales recorded yet' : 'Visible to admins only'}
+              </p>
+            ) : (
+              <>
+                <svg viewBox={`0 0 ${barChartW} ${barChartH}`} className="w-full" preserveAspectRatio="none" style={{ height: 180 }}>
+                  {salesByCaller.map((caller, i) => {
+                    const x = i * (barSlot + barGap) + (barSlot - barWidth) / 2
+                    const height = (caller.totalSales / maxCallerSales) * (barChartH - 26)
+                    const y = barChartH - height
+                    const r = Math.min(4, barWidth / 2, height)
+                    const path = height <= 0 ? '' : `M ${x} ${barChartH} L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} L ${x + barWidth - r} ${y} Q ${x + barWidth} ${y} ${x + barWidth} ${y + r} L ${x + barWidth} ${barChartH} Z`
+                    return (
+                      <g key={caller.callerId}>
+                        <title>{caller.callerName}: {formatRupees(caller.totalSales)}</title>
+                        <path d={path} fill="#3b6df5" />
+                        <text
+                          x={x + barWidth / 2}
+                          y={y - 6}
+                          textAnchor="middle"
+                          className="fill-ink-600"
+                          style={{ fontSize: 10, fontWeight: 600 }}
+                        >
+                          {formatRupees(caller.totalSales)}
+                        </text>
+                      </g>
+                    )
+                  })}
+                </svg>
+                <div className="flex px-2">
+                  {salesByCaller.map((caller, i) => (
+                    <span
+                      key={caller.callerId}
+                      title={caller.callerName}
+                      className="truncate text-center text-[11px] font-medium text-ink-400"
+                      style={{ width: barSlot, marginRight: i === salesByCaller.length - 1 ? 0 : barGap }}
+                    >
+                      {caller.callerName.split(' ')[0]}
+                    </span>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </Card>
       </div>
@@ -211,7 +295,6 @@ export function Dashboard() {
                   <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Customer</th>
                   <th className="px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Medicine</th>
                   <th className="px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Status</th>
-                  <th className="px-3 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Priority</th>
                   <th className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Assigned</th>
                 </tr>
               </thead>
@@ -230,7 +313,6 @@ export function Dashboard() {
                       )}
                     </td>
                     <td className="px-3 py-3"><LeadStatusBadge status={lead.status} /></td>
-                    <td className="px-3 py-3"><Badge variant={priorityVariant(lead.priority)}>{lead.priority.charAt(0).toUpperCase() + lead.priority.slice(1)}</Badge></td>
                     <td className="px-5 py-3 text-ink-600">{getUserName(lead.assignedCaller)}</td>
                   </tr>
                 ))}

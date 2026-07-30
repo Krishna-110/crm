@@ -8,16 +8,20 @@ import {
   RefreshCw,
   Eye,
   CalendarPlus,
+  XCircle,
 } from 'lucide-react'
 import { useApp } from '@/context/AppContext'
 import { renewalsApi } from '@/api/renewals'
 import { emitToast } from '@/lib/toast'
+import { formatIndianDate } from '@/lib/dateUtils'
 import { Card } from '@/components/ui/Card'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { Tabs } from '@/components/ui/Tabs'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { PageHeader } from '@/components/ui/PageHeader'
 import { RenewalStatusBadge } from '@/components/ui/StatusBadge'
+import { Modal } from '@/components/ui/Modal'
+import { Button } from '@/components/ui/Button'
 import type { Renewal, RenewalStatus } from '@/types'
 
 function getDaysRemainingPill(days: number) {
@@ -43,6 +47,7 @@ export function Renewals() {
   const { state, dispatch } = useApp()
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('all')
+  const [cancelingRenewal, setCancelingRenewal] = useState<Renewal | null>(null)
 
   const renewals = state.renewals ?? []
 
@@ -96,11 +101,24 @@ export function Renewals() {
   async function handleScheduleReminder(renewal: Renewal) {
     try {
       const followUp = await renewalsApi.remind(renewal.id, {
-        notes: `Renewal reminder for ${renewal.medicineName} - Customer: ${renewal.customerName}`,
+        notes: `Renewal reminder call for ${renewal.medicineName}`,
       })
       dispatch({ type: 'ADD_FOLLOW_UP', payload: { followUp } })
+      emitToast(`Reminder scheduled for ${renewal.customerName}`, 'success')
     } catch (err) {
       emitToast(err instanceof Error ? err.message : 'Failed to schedule reminder')
+    }
+  }
+
+  async function handleCancelRenewal() {
+    if (!cancelingRenewal) return
+    try {
+      await renewalsApi.cancel(cancelingRenewal.id)
+      dispatch({ type: 'DELETE_RENEWAL', payload: { id: cancelingRenewal.id } })
+      emitToast(`Renewal stopped for ${cancelingRenewal.customerName}`, 'info')
+      setCancelingRenewal(null)
+    } catch (err) {
+      emitToast(err instanceof Error ? err.message : 'Failed to stop renewal')
     }
   }
 
@@ -174,23 +192,18 @@ export function Renewals() {
                 </tr>
               ) : (
                 filteredRenewals.map((renewal) => {
-                  const dateOpts: Intl.DateTimeFormatOptions = {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric',
-                  }
                   return (
                     <tr key={renewal.id} className="border-b border-ink-50 last:border-0 hover:bg-primary-50/30 transition-colors">
                       <td className="pl-5 pr-3 py-3.5 font-medium text-ink-900">{renewal.customerName}</td>
                       <td className="px-3 py-3.5 text-ink-600">{renewal.medicineName}</td>
                       <td className="px-3 py-3.5 whitespace-nowrap text-xs text-ink-500">
-                        {new Date(renewal.orderDate).toLocaleDateString('en-IN', dateOpts)}
+                        {formatIndianDate(renewal.orderDate)}
                       </td>
                       <td className="px-3 py-3.5 whitespace-nowrap text-xs text-ink-500">
-                        {new Date(renewal.renewalDate).toLocaleDateString('en-IN', dateOpts)}
+                        {formatIndianDate(renewal.renewalDate)}
                       </td>
                       <td className="px-3 py-3.5 whitespace-nowrap text-xs text-ink-500">
-                        {new Date(renewal.expiryDate).toLocaleDateString('en-IN', dateOpts)}
+                        {formatIndianDate(renewal.expiryDate)}
                       </td>
                       <td className="px-3 py-3.5">
                         <span
@@ -228,6 +241,16 @@ export function Renewals() {
                           >
                             <RefreshCw className="h-4 w-4" />
                           </button>
+                          {renewal.status !== 'renewed' && (
+                            <button
+                              type="button"
+                              title="Stop / Cancel renewal"
+                              onClick={() => setCancelingRenewal(renewal)}
+                              className="rounded-lg p-1.5 text-danger-500 hover:bg-danger-50 hover:text-danger-600 transition-colors"
+                            >
+                              <XCircle className="h-4 w-4" />
+                            </button>
+                          )}
                           <button
                             type="button"
                             title="View details"
@@ -245,6 +268,28 @@ export function Renewals() {
           </table>
         </div>
       </Card>
+
+      {/* Stop / Cancel Renewal Confirmation Modal */}
+      <Modal
+        isOpen={!!cancelingRenewal}
+        onClose={() => setCancelingRenewal(null)}
+        title="Stop / Cancel Renewal"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            Are you sure you want to stop the renewal for <span className="font-semibold text-ink-900">{cancelingRenewal?.customerName}</span> ({cancelingRenewal?.medicineName})? This will cancel future reminder calls for this customer.
+          </p>
+          <div className="flex justify-end gap-3 pt-3 border-t border-ink-100">
+            <Button type="button" variant="secondary" onClick={() => setCancelingRenewal(null)}>
+              Keep Active
+            </Button>
+            <Button type="button" variant="danger" onClick={handleCancelRenewal}>
+              Stop Renewal
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   )
 }

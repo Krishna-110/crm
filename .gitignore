@@ -30,3 +30,6 @@ server/node_modules
 server/dist
 server/.env
 
+
+# Claude Code project config (not for the repo)
+.claude/

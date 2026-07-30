@@ -6,7 +6,7 @@ import {
   CalendarDays,
   ShoppingCart,
   RefreshCw,
-  Pill,
+  Package,
   UserCog,
   Plus,
   X,
@@ -36,7 +36,7 @@ const mainItems: NavItem[] = [
 const workItems: NavItem[] = [
   { to: '/orders', label: 'Orders', icon: ShoppingCart },
   { to: '/renewals', label: 'Renewals', icon: RefreshCw, badge: 'renewals' },
-  { to: '/medicines', label: 'Medicines', icon: Pill },
+  { to: '/stock', label: 'Stock', icon: Package },
 ]
 
 const adminItems: NavItem[] = [

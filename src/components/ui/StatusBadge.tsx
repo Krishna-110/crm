@@ -12,7 +12,7 @@ const leadStatusConfig: Record<LeadStatus, { label: string; variant: Variant }> 
   no_response: { label: 'No Response', variant: 'default' },
   not_interested: { label: 'Not Interested', variant: 'danger' },
   converted: { label: 'Converted', variant: 'success' },
-  closed: { label: 'Closed', variant: 'default' },
+  sold: { label: 'Sold', variant: 'success' },
 }
 
 const orderStageConfig: Record<OrderStage, { label: string; variant: Variant }> = {

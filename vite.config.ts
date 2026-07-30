@@ -11,6 +11,9 @@ export default defineConfig({
     },
   },
   server: {
+    // Lets the ngrok tunnel (a random *.ngrok-free.app / *.ngrok.io host each run) through
+    // Vite's Host-header check, which otherwise rejects any host it doesn't recognize.
+    allowedHosts: ['.ngrok-free.dev', '.ngrok-free.app', '.ngrok.io', '.ngrok.app'],
     proxy: {
       '/api': {
         target: 'http://localhost:3001',

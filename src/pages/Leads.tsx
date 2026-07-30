@@ -1,14 +1,14 @@
-import { useState, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useState, useMemo, useEffect } from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useApp } from '@/context/AppContext'
 import { leadsApi } from '@/api/leads'
 import { medicinesApi } from '@/api/medicines'
 import { ApiError } from '@/api/client'
 import { emitToast } from '@/lib/toast'
-import type { Lead, LeadStatus, LeadPriority, LeadSource, Medicine } from '@/types'
+import { formatIndianDate } from '@/lib/dateUtils'
+import type { Lead, LeadStatus, LeadSource } from '@/types'
 import { Card } from '@/components/ui/Card'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { Modal } from '@/components/ui/Modal'
 import { SearchInput } from '@/components/ui/SearchInput'
 import { SearchableSelect } from '@/components/ui/SearchableSelect'
@@ -25,19 +25,11 @@ import {
   ChevronDown,
   ChevronsUpDown,
   Users,
+  ShoppingCart,
 } from 'lucide-react'
 
-type SortField = 'customerName' | 'createdDate' | 'priority'
+type SortField = 'customerName' | 'createdDate'
 type SortDir = 'asc' | 'desc'
-
-const priorityOrder: Record<LeadPriority, number> = { low: 0, medium: 1, high: 2, urgent: 3 }
-
-const priorityBadgeVariant: Record<LeadPriority, 'default' | 'primary' | 'warning' | 'danger'> = {
-  low: 'default',
-  medium: 'primary',
-  high: 'warning',
-  urgent: 'danger',
-}
 
 const statusFilterTabs: { key: string; label: string; match: LeadStatus | null }[] = [
   { key: 'all', label: 'All', match: null },
@@ -48,6 +40,19 @@ const statusFilterTabs: { key: string; label: string; match: LeadStatus | null }
   { key: 'converted', label: 'Converted', match: 'converted' },
 ]
 
+// 'converted' is deliberately excluded — that transition only happens through
+// "Convert to Order" (which also creates the order), not a plain status edit.
+const editableStatusOptions: { value: LeadStatus; label: string }[] = [
+  { value: 'new', label: 'New' },
+  { value: 'contacted', label: 'Contacted' },
+  { value: 'follow_up_pending', label: 'Follow-up Pending' },
+  { value: 'interested', label: 'Interested' },
+  { value: 'call_back_later', label: 'Call Back Later' },
+  { value: 'no_response', label: 'No Response' },
+  { value: 'not_interested', label: 'Not Interested' },
+  { value: 'sold', label: 'Sold' },
+]
+
 const leadSourceOptions: { value: LeadSource; label: string }[] = [
   { value: 'website', label: 'Website' },
   { value: 'referral', label: 'Referral' },
@@ -56,13 +61,6 @@ const leadSourceOptions: { value: LeadSource; label: string }[] = [
   { value: 'social_media', label: 'Social Media' },
   { value: 'advertisement', label: 'Advertisement' },
   { value: 'other', label: 'Other' },
-]
-
-const priorityOptions: { value: LeadPriority; label: string }[] = [
-  { value: 'low', label: 'Low' },
-  { value: 'medium', label: 'Medium' },
-  { value: 'high', label: 'High' },
-  { value: 'urgent', label: 'Urgent' },
 ]
 
 type LeadMedicineRow = {
@@ -79,11 +77,15 @@ type LeadForm = {
   city: string
   state: string
   pincode: string
+  disease: string
   medicines: LeadMedicineRow[]
   doctorName: string
+  notes: string
   leadSource: LeadSource
-  priority: LeadPriority
   assignedCaller: string
+  status: LeadStatus
+  nextFollowUp: string
+  paymentScreenshot: string
 }
 
 function emptyMedicineRow(): LeadMedicineRow {
@@ -98,20 +100,26 @@ const emptyForm: LeadForm = {
   city: '',
   state: '',
   pincode: '',
+  disease: '',
   medicines: [{ id: 'new-medicine-1', name: '', days: '1' }],
   doctorName: '',
+  notes: '',
   leadSource: 'phone',
-  priority: 'medium',
   assignedCaller: '',
+  status: 'new',
+  nextFollowUp: '',
+  paymentScreenshot: '',
 }
 
 export function Leads() {
   const { state, dispatch } = useApp()
   const navigate = useNavigate()
+  const location = useLocation()
   const [search, setSearch] = useState('')
   const [activeTab, setActiveTab] = useState('all')
   const [showModal, setShowModal] = useState(false)
   const [editingLead, setEditingLead] = useState<Lead | null>(null)
+  const [convertingLead, setConvertingLead] = useState<Lead | null>(null)
   const [form, setForm] = useState<LeadForm>(emptyForm)
   const [sortField, setSortField] = useState<SortField>('createdDate')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -180,7 +188,7 @@ export function Leads() {
         l =>
           l.customerName.toLowerCase().includes(q) ||
           l.mobile.toLowerCase().includes(q) ||
-          l.medicines.some(m => m.name.toLowerCase().includes(q)),
+          (l.disease ?? '').toLowerCase().includes(q),
       )
     }
 
@@ -191,8 +199,6 @@ export function Leads() {
         cmp = a.customerName.localeCompare(b.customerName)
       } else if (sortField === 'createdDate') {
         cmp = a.createdDate.localeCompare(b.createdDate)
-      } else if (sortField === 'priority') {
-        cmp = priorityOrder[a.priority] - priorityOrder[b.priority]
       }
       return sortDir === 'asc' ? cmp : -cmp
     })
@@ -234,16 +240,31 @@ export function Leads() {
       city: lead.city,
       state: lead.state,
       pincode: lead.pincode,
+      disease: lead.disease ?? '',
       medicines: lead.medicines.length
         ? lead.medicines.map(m => ({ id: m.id, name: m.name, days: String(m.days) }))
         : [emptyMedicineRow()],
       doctorName: lead.doctorName ?? '',
+      notes: lead.notes ?? '',
       leadSource: lead.leadSource,
-      priority: lead.priority,
       assignedCaller: lead.assignedCaller ?? '',
+      status: lead.status,
+      nextFollowUp: lead.nextFollowUp ?? '',
+      paymentScreenshot: lead.paymentScreenshot ?? '',
     })
     setShowModal(true)
   }
+
+  // Lead Detail's "Edit" button navigates here with the lead id in location state
+  // (rather than duplicating this whole form on that page) — open its edit modal
+  // automatically, then clear the state so it doesn't reopen on a later visit.
+  useEffect(() => {
+    const editLeadId = (location.state as { editLeadId?: string } | null)?.editLeadId
+    if (!editLeadId) return
+    const lead = state.leads.find(l => l.id === editLeadId)
+    if (lead) openEdit(lead)
+    navigate(location.pathname, { replace: true, state: null })
+  }, [location.state])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -251,7 +272,22 @@ export function Leads() {
     const medicines = form.medicines
       .filter(row => row.name.trim())
       .map(row => ({ id: row.id, name: row.name.trim(), days: Number(row.days) || 1 }))
-    if (medicines.length === 0) return
+    if (!editingLead && medicines.length === 0) return
+
+    if (editingLead && form.status === 'sold') {
+      if (!form.address.trim()) {
+        emitToast('Customer Address is required when Lead Status is Sold')
+        return
+      }
+      if (!form.pincode.trim()) {
+        emitToast('Pincode is required when Lead Status is Sold')
+        return
+      }
+      if (!form.paymentScreenshot.trim()) {
+        emitToast('Payment Screenshot is required when Lead Status is Sold')
+        return
+      }
+    }
 
     const payload = {
       customerName: form.customerName,
@@ -261,11 +297,22 @@ export function Leads() {
       city: form.city,
       state: form.state,
       pincode: form.pincode,
-      medicines,
+      disease: form.disease,
+      // Editing a lead with no medicines yet (added later via comments) shouldn't wipe
+      // that out — only send this key when there's something to bulk-replace with, since
+      // the backend treats a present `medicines` array as "replace all of them".
+      ...(medicines.length > 0 ? { medicines } : {}),
       doctorName: form.doctorName || undefined,
+      notes: form.notes || undefined,
       leadSource: form.leadSource,
-      priority: form.priority,
       assignedCaller: form.assignedCaller || undefined,
+      // Status/next follow-up only make sense to set once a lead already exists —
+      // a new lead always starts at 'new' with no follow-up scheduled yet.
+      ...(editingLead ? {
+        status: form.status,
+        nextFollowUp: form.nextFollowUp || undefined,
+        paymentScreenshot: form.paymentScreenshot || undefined,
+      } : {}),
     }
 
     try {
@@ -291,6 +338,19 @@ export function Leads() {
     }
   }
 
+  async function handleConvertToOrder() {
+    if (!convertingLead) return
+    try {
+      const { order, lead: updatedLead } = await leadsApi.convert(convertingLead.id)
+      dispatch({ type: 'ADD_ORDER', payload: { order } })
+      dispatch({ type: 'UPDATE_LEAD', payload: { id: updatedLead.id, updates: updatedLead } })
+      emitToast(`Lead ${convertingLead.customerName} converted to order ${order.orderNumber}!`, 'success')
+      setConvertingLead(null)
+    } catch (err) {
+      emitToast(err instanceof Error ? err.message : 'Failed to convert lead')
+    }
+  }
+
   function getCallerName(id?: string) {
     if (!id) return '-'
     return state.users.find(u => u.id === id)?.name ?? '-'
@@ -313,7 +373,7 @@ export function Leads() {
       <SearchInput
         value={search}
         onChange={setSearch}
-        placeholder="Search by name, mobile, or medicine..."
+        placeholder="Search by name, mobile, or disease..."
       />
 
       {/* Filter Tabs */}
@@ -342,16 +402,8 @@ export function Leads() {
                   </span>
                 </th>
                 <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Mobile</th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Medicines</th>
-                <th
-                  className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400 cursor-pointer select-none"
-                  onClick={() => handleSort('priority')}
-                >
-                  <span className="inline-flex items-center gap-1">
-                    Priority <SortIcon field="priority" />
-                  </span>
-                </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Status</th>
+                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Disease</th>
+                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Lead Status</th>
                 <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Assigned To</th>
                 <th
                   className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400 cursor-pointer select-none"
@@ -361,7 +413,7 @@ export function Leads() {
                     Next Follow-up <SortIcon field="createdDate" />
                   </span>
                 </th>
-                <th className="px-3 py-3 text-left text-[11px] font-semibold uppercase tracking-wider text-ink-400">Actions</th>
+                <th className="pl-3 pr-5 py-3 text-right text-[11px] font-semibold uppercase tracking-wider text-ink-400">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -373,24 +425,14 @@ export function Leads() {
                 >
                   <td className="pl-5 pr-3 py-3.5 font-medium text-ink-900">{lead.customerName}</td>
                   <td className="px-3 py-3.5 text-ink-600">{lead.mobile}</td>
-                  <td className="px-3 py-3.5 text-ink-600">
-                    {lead.medicines[0] ? `${lead.medicines[0].name} · ${lead.medicines[0].days}d` : '-'}
-                    {lead.medicines.length > 1 && (
-                      <span className="ml-1 text-xs text-ink-500">+{lead.medicines.length - 1} more</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-3.5">
-                    <Badge variant={priorityBadgeVariant[lead.priority]}>
-                      {lead.priority.charAt(0).toUpperCase() + lead.priority.slice(1)}
-                    </Badge>
-                  </td>
+                  <td className="px-3 py-3.5 text-ink-600">{lead.disease || '-'}</td>
                   <td className="px-3 py-3.5">
                     <LeadStatusBadge status={lead.status} />
                   </td>
                   <td className="px-3 py-3.5 text-ink-600">{getCallerName(lead.assignedCaller)}</td>
-                  <td className="px-3 py-3.5 text-xs text-ink-500">{lead.nextFollowUp ?? '-'}</td>
-                  <td className="px-3 py-3.5" onClick={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-1">
+                  <td className="px-3 py-3.5 text-xs text-ink-500">{formatIndianDate(lead.nextFollowUp)}</td>
+                  <td className="pl-3 pr-5 py-3.5 text-right" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => navigate(`/leads/${lead.id}`)}
                         className="rounded-lg p-1.5 text-ink-400 hover:bg-ink-100 hover:text-ink-700 transition-colors"
@@ -405,6 +447,15 @@ export function Leads() {
                       >
                         <Edit2 size={15} />
                       </button>
+                      {lead.status !== 'converted' && (
+                        <button
+                          onClick={() => setConvertingLead(lead)}
+                          className="rounded-lg p-1.5 text-success-600 hover:bg-success-50 hover:text-success-700 transition-colors"
+                          title="Convert to Order"
+                        >
+                          <ShoppingCart size={15} />
+                        </button>
+                      )}
                       <button
                         onClick={() => deleteLead(lead.id)}
                         className="rounded-lg p-1.5 text-ink-400 hover:bg-danger-50 hover:text-danger-600 transition-colors"
@@ -515,6 +566,19 @@ export function Leads() {
             </div>
           </div>
 
+          {/* Disease */}
+          <div>
+            <label className="field-label">Disease</label>
+            <input
+              type="text"
+              required={!editingLead}
+              value={form.disease}
+              onChange={e => setForm(f => ({ ...f, disease: e.target.value }))}
+              className="field-input"
+              placeholder="e.g. Diabetes Type 2"
+            />
+          </div>
+
           {/* Medicines Required */}
           <div>
             <label className="field-label">Medicines Required</label>
@@ -529,14 +593,14 @@ export function Leads() {
                       placeholder="Search medicines..."
                       onCreateNew={name => createMedicineForRow(row.id, name)}
                       emptyText="No medicines found"
-                      required={idx === 0}
+                      required={idx === 0 && !editingLead}
                     />
                   </div>
                   <div className="w-28">
                     <input
                       type="number"
                       min={1}
-                      required={idx === 0}
+                      required={idx === 0 && !editingLead}
                       value={row.days}
                       onChange={e => updateMedicineRow(row.id, { days: e.target.value })}
                       placeholder="Days"
@@ -574,8 +638,19 @@ export function Leads() {
             />
           </div>
 
+          <div>
+            <label className="field-label">Notes (optional)</label>
+            <textarea
+              rows={2}
+              value={form.notes}
+              onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
+              placeholder="Any additional context about this lead..."
+              className="field-input resize-none"
+            />
+          </div>
+
           {/* Lead Meta */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="field-label">Lead Source</label>
               <select
@@ -584,20 +659,6 @@ export function Leads() {
                 className="field-input"
               >
                 {leadSourceOptions.map(o => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="field-label">Priority</label>
-              <select
-                value={form.priority}
-                onChange={e => setForm(f => ({ ...f, priority: e.target.value as LeadPriority }))}
-                className="field-input"
-              >
-                {priorityOptions.map(o => (
                   <option key={o.value} value={o.value}>
                     {o.label}
                   </option>
@@ -621,6 +682,77 @@ export function Leads() {
             </div>
           </div>
 
+          {editingLead && (
+            <>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="field-label">Lead Status</label>
+                  <select
+                    value={form.status}
+                    onChange={e => setForm(f => ({ ...f, status: e.target.value as LeadStatus }))}
+                    className="field-input"
+                    disabled={form.status === 'converted'}
+                  >
+                    {form.status === 'converted' && <option value="converted">Converted</option>}
+                    {editableStatusOptions.map(o => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="field-label">Next Follow-up</label>
+                  <input
+                    type="date"
+                    value={form.nextFollowUp}
+                    onChange={e => setForm(f => ({ ...f, nextFollowUp: e.target.value }))}
+                    className="field-input"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="field-label">
+                  Payment Screenshot {form.status === 'sold' && <span className="text-danger-500">*</span>}
+                </label>
+                <div className="space-y-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={e => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      if (file.size > 5 * 1024 * 1024) {
+                        emitToast('Image size should be under 5MB')
+                        return
+                      }
+                      const reader = new FileReader()
+                      reader.onloadend = () => {
+                        setForm(f => ({ ...f, paymentScreenshot: reader.result as string }))
+                      }
+                      reader.readAsDataURL(file)
+                    }}
+                    className="field-input py-1.5 text-xs text-ink-600 file:mr-3 file:rounded-lg file:border-0 file:bg-primary-50 file:px-3 file:py-1 file:text-xs file:font-semibold file:text-primary-700 hover:file:bg-primary-100"
+                  />
+                  {form.paymentScreenshot && (
+                    <div className="relative inline-block mt-2 rounded-xl border border-ink-200 overflow-hidden bg-ink-50 p-1">
+                      <img src={form.paymentScreenshot} alt="Payment Screenshot" className="h-28 max-w-full object-contain rounded-lg" />
+                      <button
+                        type="button"
+                        onClick={() => setForm(f => ({ ...f, paymentScreenshot: '' }))}
+                        className="absolute top-2 right-2 rounded-full bg-danger-600 p-1 text-white shadow hover:bg-danger-700"
+                        title="Remove image"
+                      >
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="flex justify-end gap-3 pt-4 border-t border-ink-200">
             <Button type="button" variant="secondary" onClick={() => setShowModal(false)}>
               Cancel
@@ -628,6 +760,28 @@ export function Leads() {
             <Button type="submit">{editingLead ? 'Update' : 'Add'} Lead</Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Convert to Order Confirmation Modal */}
+      <Modal
+        isOpen={!!convertingLead}
+        onClose={() => setConvertingLead(null)}
+        title="Convert Lead to Order"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-ink-600">
+            Are you sure you want to convert the lead for <span className="font-semibold text-ink-900">{convertingLead?.customerName}</span> into an order? This will create a new order, deduct stock, and update the lead status.
+          </p>
+          <div className="flex justify-end gap-3 pt-3 border-t border-ink-100">
+            <Button type="button" variant="secondary" onClick={() => setConvertingLead(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="success" onClick={handleConvertToOrder}>
+              Confirm Conversion
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   )

@@ -23,9 +23,7 @@ export type LeadStatus =
   | 'no_response'
   | 'not_interested'
   | 'converted'
-  | 'closed';
-
-export type LeadPriority = 'low' | 'medium' | 'high' | 'urgent';
+  | 'sold';
 
 export type LeadSource =
   | 'website'
@@ -62,14 +60,15 @@ export type Lead = {
   pincode: string;
   medicines: LeadMedicineItem[];
   doctorName?: string;
+  disease?: string;
   assignedCaller?: string;
   leadSource: LeadSource;
-  priority: LeadPriority;
   status: LeadStatus;
   createdDate: string;
   lastFollowUp?: string;
   nextFollowUp?: string;
   notes?: string;
+  paymentScreenshot?: string;
   activities: LeadActivity[];
 };
 
@@ -81,6 +80,7 @@ export type Medicine = {
   genericName?: string;
   dosageForm?: DosageForm;
   unitPrice: number;
+  stockQuantity: number;
   isActive: boolean;
   createdDate: string;
 };
@@ -95,6 +95,8 @@ export type OrderStage =
 
 export type PaymentStatus = 'pending' | 'partial' | 'paid' | 'refunded';
 
+export type DiscountType = 'none' | 'flat' | 'percentage';
+
 export type Order = {
   id: string;
   orderNumber: string;
@@ -103,6 +105,9 @@ export type Order = {
   address: string;
   medicines: { name: string; quantity: number; price: number }[];
   totalAmount: number;
+  discountType: DiscountType;
+  discountValue: number;
+  payableAmount: number;
   paymentStatus: PaymentStatus;
   stage: OrderStage;
   createdDate: string;
@@ -157,6 +162,9 @@ export type DashboardStats = {
     convertedCount: number;
     conversionRate: number;
   }[];
+  leadsByPeriod: { today: number; thisWeek: number; thisMonth: number };
+  salesByPeriod: { today: number; thisWeek: number; thisMonth: number };
+  salesByCaller: { callerId: string; callerName: string; totalSales: number }[];
 };
 
 export type AppState = {
@@ -200,12 +208,14 @@ export type AppAction =
   | { type: 'UPDATE_ORDER'; payload: { id: string; updates: Partial<Order> } }
   | { type: 'ADD_RENEWAL'; payload: { renewal: Renewal } }
   | { type: 'UPDATE_RENEWAL'; payload: { id: string; updates: Partial<Renewal> } }
+  | { type: 'DELETE_RENEWAL'; payload: { id: string } }
   | { type: 'ADD_FOLLOW_UP'; payload: { followUp: FollowUp } }
   | { type: 'UPDATE_FOLLOW_UP'; payload: { id: string; updates: Partial<FollowUp> } }
   | { type: 'ADD_NOTIFICATION'; payload: { notification: Notification } }
   | { type: 'MARK_NOTIFICATION_READ'; payload: { id: string } }
   | { type: 'SET_SEARCH_QUERY'; payload: { query: string } }
   | { type: 'ADD_LEAD_ACTIVITY'; payload: { leadId: string; activity: LeadActivity } }
+  | { type: 'ADD_LEAD_MEDICINE'; payload: { leadId: string; medicine: LeadMedicineItem } }
   | { type: 'ADD_MEDICINE'; payload: { medicine: Medicine } }
   | { type: 'UPDATE_MEDICINE'; payload: { id: string; updates: Partial<Medicine> } }
   | { type: 'DELETE_MEDICINE'; payload: { id: string } };

@@ -5,7 +5,6 @@ export type LookupItem = { code: string; label: string };
 
 export type Lookups = {
   leadStatuses: LookupItem[];
-  leadPriorities: LookupItem[];
   leadSources: LookupItem[];
   orderStages: LookupItem[];
   paymentStatuses: LookupItem[];

@@ -43,3 +43,15 @@ renewalsRouter.post('/:id/remind', async (req, res) => {
 
   res.status(201).json(serializeFollowUp(followUp));
 });
+
+renewalsRouter.delete('/:id', async (req, res) => {
+  await withUserTx(req.userId!, async (client) => {
+    const { rowCount } = await client.query(
+      'UPDATE renewals SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL',
+      [req.params.id],
+    );
+    if (rowCount === 0) throw ApiError.notFound('Renewal not found');
+  });
+  res.status(204).end();
+});
+

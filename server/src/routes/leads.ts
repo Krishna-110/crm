@@ -63,11 +63,12 @@ const LEAD_FIELD_MAP: Record<string, string> = {
   state: 'state',
   pincode: 'pincode',
   doctorName: 'doctor_name',
+  disease: 'disease',
   assignedCaller: 'assigned_caller_id',
   leadSource: 'lead_source',
-  priority: 'priority',
   status: 'status',
   notes: 'notes',
+  paymentScreenshot: 'payment_screenshot',
   nextFollowUp: 'next_follow_up_at',
   lastFollowUp: 'last_follow_up_at',
 };
@@ -82,7 +83,7 @@ leadsRouter.get('/', async (req, res) => {
 
 leadsRouter.post('/', async (req, res) => {
   const body = req.body ?? {};
-  for (const field of ['customerName', 'mobile', 'address', 'city', 'state', 'pincode']) {
+  for (const field of ['customerName', 'mobile', 'address', 'city', 'state', 'pincode', 'disease']) {
     if (!body[field]) throw ApiError.badRequest(`${field} is required`);
   }
   const medicines: MedicineInput[] = Array.isArray(body.medicines) ? body.medicines : [];
@@ -95,13 +96,13 @@ leadsRouter.post('/', async (req, res) => {
 
     const { rows } = await client.query(
       `INSERT INTO leads (customer_name, mobile, alternate_number, address, city, state, pincode,
-                          medicine_required, quantity, doctor_name, assigned_caller_id, lead_source,
-                          priority, notes, created_by)
+                          medicine_required, quantity, disease, doctor_name, assigned_caller_id, lead_source,
+                          notes, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,1,$9,$10,$11,$12,$13,$14)
        RETURNING id`,
       [
         body.customerName, body.mobile, body.alternateNumber ?? null, body.address, body.city, body.state, body.pincode,
-        medicineSummary, body.doctorName ?? null, assignedCallerId, body.leadSource ?? 'other', body.priority ?? 'medium',
+        medicineSummary, body.disease, body.doctorName ?? null, assignedCallerId, body.leadSource ?? 'other',
         body.notes ?? null, req.userId,
       ],
     );
@@ -110,7 +111,7 @@ leadsRouter.post('/', async (req, res) => {
     await insertLeadMedicines(client, leadId, medicines);
     await client.query(
       `INSERT INTO lead_activities (lead_id, activity_type, description, created_by) VALUES ($1, 'created', $2, $3)`,
-      [leadId, 'Lead created', req.userId],
+      [leadId, `Lead created — ${body.disease}`, req.userId],
     );
 
     return fetchLeadById(client, leadId);
@@ -124,11 +125,28 @@ leadsRouter.patch('/:id', async (req, res) => {
 
   const lead = await withUserTx(req.userId!, async (client) => {
     const { rows: beforeRows } = await client.query(
-      'SELECT status, assigned_caller_id FROM leads WHERE id = $1 AND deleted_at IS NULL',
+      'SELECT status, assigned_caller_id, address, pincode, payment_screenshot FROM leads WHERE id = $1 AND deleted_at IS NULL',
       [req.params.id],
     );
     const before = beforeRows[0];
     if (!before) throw ApiError.notFound('Lead not found');
+
+    const targetStatus = 'status' in body ? body.status : before.status;
+    if (targetStatus === 'sold') {
+      const address = 'address' in body ? body.address : before.address;
+      const pincode = 'pincode' in body ? body.pincode : before.pincode;
+      const paymentScreenshot = 'paymentScreenshot' in body ? body.paymentScreenshot : before.payment_screenshot;
+
+      if (!address || !String(address).trim()) {
+        throw ApiError.badRequest('Address is required when Lead Status is Sold');
+      }
+      if (!pincode || !String(pincode).trim()) {
+        throw ApiError.badRequest('Pincode is required when Lead Status is Sold');
+      }
+      if (!paymentScreenshot || !String(paymentScreenshot).trim()) {
+        throw ApiError.badRequest('Payment Screenshot is required when Lead Status is Sold');
+      }
+    }
 
     const sets: string[] = [];
     const values: unknown[] = [];
@@ -187,10 +205,21 @@ leadsRouter.delete('/:id', async (req, res) => {
 });
 
 leadsRouter.post('/:id/activities', async (req, res) => {
-  const description = req.body?.description;
+  const body = req.body ?? {};
+  const description = body.description;
   if (!description) throw ApiError.badRequest('description is required');
 
-  const activity = await withUserTx(req.userId!, async (client) => {
+  const medicineInput = body.medicine;
+  if (medicineInput !== undefined && medicineInput !== null) {
+    if (typeof medicineInput.name !== 'string' || !medicineInput.name.trim()) {
+      throw ApiError.badRequest('medicine name is required');
+    }
+    if (!Number.isFinite(Number(medicineInput.days)) || Number(medicineInput.days) <= 0) {
+      throw ApiError.badRequest('medicine days must be a positive number');
+    }
+  }
+
+  const result = await withUserTx(req.userId!, async (client) => {
     const { rows } = await client.query(
       `INSERT INTO lead_activities (lead_id, activity_type, description, created_by)
        SELECT id, 'comment', $2, $3 FROM leads WHERE id = $1 AND deleted_at IS NULL
@@ -198,10 +227,32 @@ leadsRouter.post('/:id/activities', async (req, res) => {
       [req.params.id, description, req.userId],
     );
     if (!rows[0]) throw ApiError.notFound('Lead not found');
-    return rows[0];
+
+    let medicine = null;
+    if (medicineInput) {
+      const name = medicineInput.name.trim();
+      await insertLeadMedicines(client, req.params.id, [{ name, days: medicineInput.days }]);
+
+      const { rows: allMeds } = await client.query(
+        'SELECT medicine_name FROM lead_medicines WHERE lead_id = $1 ORDER BY created_at',
+        [req.params.id],
+      );
+      await client.query('UPDATE leads SET medicine_required = $1 WHERE id = $2', [
+        allMeds.map((m) => m.medicine_name).join(', '),
+        req.params.id,
+      ]);
+
+      const { rows: newMedRows } = await client.query(
+        'SELECT * FROM lead_medicines WHERE lead_id = $1 ORDER BY created_at DESC LIMIT 1',
+        [req.params.id],
+      );
+      medicine = serializeLeadMedicine(newMedRows[0]);
+    }
+
+    return { activity: serializeLeadActivity(rows[0]), medicine };
   });
 
-  res.status(201).json(serializeLeadActivity(activity));
+  res.status(201).json(result);
 });
 
 leadsRouter.post('/:id/convert', async (req, res) => {
