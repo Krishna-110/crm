@@ -9,13 +9,11 @@ function required(name: string): string {
 export const config = {
   port: Number(process.env.PORT ?? 3001),
   tokenTtlHours: Number(process.env.TOKEN_TTL_HOURS ?? 24),
-  db: {
-    host: process.env.PGHOST ?? 'localhost',
-    port: Number(process.env.PGPORT ?? 5432),
-    database: required('PGDATABASE'),
-    user: required('PGUSER'),
-    password: required('PGPASSWORD'),
-  },
+  // There is no application `db` block any more. The request path connects through Prisma,
+  // which reads DATABASE_URL (app_prisma) via prisma.config.ts, not this file. The old
+  // `db` entry described app_user, whose LOGIN was revoked in 017_disable_rls.sql — keeping
+  // a required('PGUSER') here would demand credentials for a role that can no longer
+  // connect. PGHOST/PGPORT/PGDATABASE survive only as fallbacks for maintDb below.
   maintDb: {
     host: process.env.MAINT_PGHOST ?? process.env.PGHOST ?? 'localhost',
     port: Number(process.env.MAINT_PGPORT ?? process.env.PGPORT ?? 5432),

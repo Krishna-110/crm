@@ -1,5 +1,5 @@
 import express from 'express';
-import { appPool } from './db.js';
+import { prisma } from './prisma.js';
 import { changePassword, login, logout, me, requireAuth } from './auth.js';
 import { errorMiddleware } from './errors.js';
 import { leadsRouter } from './routes/leads.js';
@@ -16,7 +16,7 @@ export const app = express();
 app.use(express.json());
 
 app.get('/api/health', async (_req, res) => {
-  await appPool.query('SELECT 1');
+  await prisma.$queryRaw`SELECT 1`;
   res.json({ ok: true });
 });
 

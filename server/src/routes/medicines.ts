@@ -1,19 +1,28 @@
 import { Router } from 'express';
-import { withUserTx } from '../db.js';
+import type { Prisma } from '@prisma/client';
+import { dbFor, withDbSession } from '../scopedPrisma.js';
 import { ApiError } from '../errors.js';
+import { requireAdmin } from '../scope.js';
 import { serializeMedicine } from '../serializers.js';
 
 export const medicinesRouter = Router();
 
+// products_select is `app_current_role() IS NOT NULL` — every authenticated user reads the
+// full catalogue, so there is no read scope here. All writes were admin-only.
 medicinesRouter.get('/', async (req, res) => {
-  const medicines = await withUserTx(req.userId!, async (client) => {
-    const { rows } = await client.query('SELECT * FROM products WHERE deleted_at IS NULL ORDER BY created_at DESC');
-    return rows;
+  const db = dbFor(req.actor);
+  const medicines = await db.products.findMany({
+    where: { deleted_at: null },
+    orderBy: { created_at: 'desc' },
   });
   res.json(medicines.map(serializeMedicine));
 });
 
 medicinesRouter.post('/', async (req, res) => {
+  const actor = req.actor!;
+  requireAdmin(actor);
+  const db = dbFor(actor);
+
   const body = req.body ?? {};
   if (!body.name) throw ApiError.badRequest('name is required');
 
@@ -22,62 +31,69 @@ medicinesRouter.post('/', async (req, res) => {
     throw ApiError.badRequest('Opening stock must be a whole number of 0 or more');
   }
 
-  const medicine = await withUserTx(req.userId!, async (client) => {
-    const { rows } = await client.query(
-      `INSERT INTO products (sku, generic_name, brand_name, dosage_form, unit_price, stock_quantity, is_active, created_by)
-       VALUES ('MED-' || lpad(nextval('product_sku_seq')::text, 5, '0'), $1, $2, $3, $4, $5, $6, $7)
-       RETURNING *`,
-      [
-        body.genericName || body.name,
-        body.name,
-        body.dosageForm ?? null,
-        Number(body.unitPrice) || 0,
-        openingStock,
-        body.isActive ?? true,
-        req.userId,
-      ],
-    );
-    return rows[0];
-  });
+  // SKUs come from a Postgres sequence, which Prisma cannot express in a create() — pull
+  // the next value first, then create. Sequences don't roll back, so a failed create just
+  // burns a number, same as the previous single-statement INSERT would on constraint error.
+  const skuRows = await db.$queryRaw<{ sku: string }[]>`
+    SELECT 'MED-' || lpad(nextval('product_sku_seq')::text, 5, '0') AS sku
+  `;
+  const sku = skuRows[0]?.sku;
+  if (!sku) throw new Error('Failed to generate product SKU');
+
+  const medicine = await withDbSession(actor, (tx) => tx.products.create({
+    data: {
+      sku,
+      generic_name: body.genericName || body.name,
+      brand_name: body.name,
+      dosage_form: body.dosageForm ?? null,
+      unit_price: Number(body.unitPrice) || 0,
+      stock_quantity: openingStock,
+      is_active: body.isActive ?? true,
+      created_by: actor.userId,
+    },
+  }));
 
   res.status(201).json(serializeMedicine(medicine));
 });
 
-const MEDICINE_FIELD_MAP: Record<string, string> = {
+const MEDICINE_FIELD_MAP = {
   name: 'brand_name',
   genericName: 'generic_name',
   dosageForm: 'dosage_form',
   unitPrice: 'unit_price',
   isActive: 'is_active',
-};
+} as const;
 
 medicinesRouter.patch('/:id', async (req, res) => {
+  const actor = req.actor!;
+  requireAdmin(actor);
+
   const body = req.body ?? {};
+  const data: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(MEDICINE_FIELD_MAP)) {
+    // Note: no `?? null` here — the original medicines builder pushed body[key] verbatim,
+    // unlike users.ts which coerced undefined to null. Behaviour preserved as-is.
+    if (key in body) data[field] = body[key];
+  }
+  if (Object.keys(data).length === 0) throw ApiError.badRequest('no updatable fields provided');
 
-  const medicine = await withUserTx(req.userId!, async (client) => {
-    const sets: string[] = [];
-    const values: unknown[] = [];
-    for (const [key, column] of Object.entries(MEDICINE_FIELD_MAP)) {
-      if (key in body) {
-        values.push(body[key]);
-        sets.push(`${column} = $${values.length}`);
-      }
-    }
-    if (sets.length === 0) throw ApiError.badRequest('no updatable fields provided');
-
-    values.push(req.params.id);
-    const { rows } = await client.query(
-      `UPDATE products SET ${sets.join(', ')} WHERE id = $${values.length} AND deleted_at IS NULL RETURNING *`,
-      values,
-    );
-    if (!rows[0]) throw ApiError.notFound('Medicine not found');
-    return rows[0];
+  const medicine = await withDbSession(actor, async (tx) => {
+    const { count } = await tx.products.updateMany({
+      where: { id: req.params.id, deleted_at: null },
+      data: data as Prisma.productsUpdateManyMutationInput,
+    });
+    if (count === 0) throw ApiError.notFound('Medicine not found');
+    return tx.products.findUnique({ where: { id: req.params.id } });
   });
-
+  if (!medicine) throw ApiError.notFound('Medicine not found');
   res.json(serializeMedicine(medicine));
 });
 
 medicinesRouter.post('/:id/stock', async (req, res) => {
+  const actor = req.actor!;
+  requireAdmin(actor);
+  const db = dbFor(actor);
+
   const body = req.body ?? {};
   const { mode, quantity } = body;
 
@@ -90,29 +106,34 @@ medicinesRouter.post('/:id/stock', async (req, res) => {
     );
   }
 
-  const medicine = await withUserTx(req.userId!, async (client) => {
-    const { rows } = await client.query(
-      mode === 'add'
-        ? `UPDATE products SET stock_quantity = stock_quantity + $1, updated_by = $2
-           WHERE id = $3 AND deleted_at IS NULL RETURNING *`
-        : `UPDATE products SET stock_quantity = $1, updated_by = $2
-           WHERE id = $3 AND deleted_at IS NULL RETURNING *`,
-      [quantity, req.userId, req.params.id],
-    );
-    if (!rows[0]) throw ApiError.notFound('Medicine not found');
-    return rows[0];
+  // `add` is a read-modify-write in SQL (stock_quantity = stock_quantity + $1); Prisma
+  // expresses that atomically as { increment }, so it stays a single UPDATE.
+  const medicine = await withDbSession(actor, async (tx) => {
+    const { count } = await tx.products.updateMany({
+      where: { id: req.params.id, deleted_at: null },
+      data: {
+        stock_quantity: mode === 'add' ? { increment: quantity } : quantity,
+        updated_by: actor.userId,
+      },
+    });
+    if (count === 0) throw ApiError.notFound('Medicine not found');
+    return tx.products.findUnique({ where: { id: req.params.id } });
   });
-
+  if (!medicine) throw ApiError.notFound('Medicine not found');
   res.json(serializeMedicine(medicine));
 });
 
 medicinesRouter.delete('/:id', async (req, res) => {
-  await withUserTx(req.userId!, async (client) => {
-    const { rowCount } = await client.query(
-      'UPDATE products SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL',
-      [req.params.id],
-    );
-    if (rowCount === 0) throw ApiError.notFound('Medicine not found');
+  const actor = req.actor!;
+  requireAdmin(actor);
+
+  const count = await withDbSession(actor, async (tx) => {
+    const r = await tx.products.updateMany({
+      where: { id: req.params.id, deleted_at: null },
+      data: { deleted_at: new Date() },
+    });
+    return r.count;
   });
+  if (count === 0) throw ApiError.notFound('Medicine not found');
   res.status(204).end();
 });

@@ -2,9 +2,8 @@ import bcrypt from 'bcryptjs';
 import { maintPool } from '../src/db.js';
 
 async function main() {
-  console.log('Setting app_user password...');
-  await maintPool.query(`ALTER ROLE app_user WITH PASSWORD 'apptest123'`);
-
+  // The app_user password reset that used to live here is gone: the request path connects
+  // as app_prisma via DATABASE_URL, and app_user was made NOLOGIN in 017_disable_rls.sql.
   console.log('Resetting seed user password hashes...');
   const adminHash = await bcrypt.hash('admin123', 10);
   const callerHash = await bcrypt.hash('caller123', 10);

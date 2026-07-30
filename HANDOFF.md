@@ -1,7 +1,7 @@
 # MediCRM — Project Handoff
 
-A medical distribution CRM built end-to-end in this repo: PostgreSQL schema with row-level
-security, an Express/TypeScript API, and a React/TypeScript frontend. This document is a
+A medical distribution CRM built end-to-end in this repo: a PostgreSQL schema, an
+Express/TypeScript API on Prisma, and a React/TypeScript frontend. This document is a
 full account of what's been built, why, and the traps already found and fixed — written so
 a new agent (or human) can pick this up without re-discovering the same bugs.
 
@@ -15,9 +15,13 @@ customer record + order + order lines, deducts stock) → **Renewal** tracking f
 medicine cycles. Alongside: a medicine/stock catalog, user management, a calendar of
 follow-ups, and a dashboard with live + materialized-view stats.
 
-Authorization is enforced by **PostgreSQL RLS**, not just hidden UI buttons — several test
+Authorization is enforced **server-side**, not just by hidden UI buttons — several test
 cases in `docs/TEST_PLAN.md` exist specifically to prove the server rejects an action a
 Caller shouldn't be able to take even when the button is still visible/clickable for them.
+It was originally PostgreSQL RLS; as of migration 017 the same rules live in
+`server/src/scope.ts` and are applied by the Prisma client extension (see Architecture).
+The *observable* API behaviour is unchanged, so those test cases still hold as written —
+only the enforcement mechanism moved.
 
 ## Tech stack (exact versions in use)
 
@@ -30,7 +34,8 @@ Caller shouldn't be able to take even when the button is still visible/clickable
 | | TypeScript | 6.0.3 |
 | Backend | Node.js | v24.11.1 |
 | | Express | 5.2.1 |
-| | pg (node-postgres) | 8.22.0 |
+| | Prisma ORM | 7.9.1 |
+| | pg (node-postgres) | 8.22.0 (maintenance pool only) |
 | | bcryptjs | 2.4.3 |
 | Database | PostgreSQL | 18.3 |
 
@@ -42,19 +47,25 @@ db/
                          back-edited into it; read schema.sql + migrations 001-012
                          together to know the live shape of a table)
   seed.sql            — demo seed data
-  migrations/          001-012, applied in order (see "Migration history" below)
+  migrations/          001-017, applied in order (see "Migration history" below)
   README.md           — install order or a clean DB
 server/
   src/
     app.ts            — route mounting, express.json, error middleware last
-    db.ts             — appPool / maintPool / withUserTx (the correctness core)
+    prisma.ts         — the PrismaClient (role app_prisma, BYPASSRLS)
+    scope.ts          — the 71 former RLS policies, translated to TypeScript predicates
+    scopedPrisma.ts   — client extension that injects those predicates + withDbSession
+                         (the correctness core — read this before touching a route)
+    db.ts             — maintPool only (matview refresh / partitions)
     auth.ts           — bearer token auth, login/logout/me, changePassword
     errors.ts         — pg-error-code → HTTP-status mapping + friendly constraint messages
     serializers.ts    — snake_case DB rows → camelCase frontend shapes
     scheduler.ts       — matview refresh / partition creation / session cleanup, on a timer
     routes/           — one router per resource
+    prisma/schema.prisma — introspected, hand-curated; NOT the schema source of truth
   scripts/
-    dev-setup.ts      — resets app_user password + seed users' bcrypt hashes, refreshes matviews
+    verify_scoped_prisma.ts — asserts scope injection + the write guard actually hold
+    dev-setup.ts      — resets seed users' bcrypt hashes, refreshes matviews
     clean_test_leads.ts — deletes leads matching known test-data name patterns
 src/
   api/                — one thin fetch-wrapper module per resource, mirrors server/src/routes
@@ -73,7 +84,7 @@ npm install
 npm --prefix server install
 
 # Postgres must already have the `medcrm` database built from db/schema.sql + db/seed.sql +
-# migrations 001-012 in order (see db/README.md). Then:
+# migrations 001-017 in order (see db/README.md). Then:
 npm --prefix server run setup      # resets demo passwords, refreshes matviews
 
 # day to day:
@@ -92,22 +103,45 @@ was hit and fixed once already — see "Gotchas" below.
 
 ## Architecture
 
-- **Two `pg.Pool`s** (`server/src/db.ts`): `appPool` (role `app_user`, RLS enforced) for
-  every request-path query via `withUserTx(userId, fn)` — `connect → BEGIN → SELECT
-  set_app_session($1) → fn(client) → COMMIT/ROLLBACK → release`. GUCs set this way are
-  transaction-local, so the pool is safe to reuse across requests. **Never `pool.query`
-  directly for authed reads** — it silently returns 0 rows since no session context is set.
-  `maintPool` (role `postgres`) is scheduler-only, for matview refreshes that regular
-  RLS-bound queries can't do (matviews carry no RLS policies).
+- **Prisma is the data layer** (`server/src/prisma.ts`), connecting as role `app_prisma`,
+  which has `BYPASSRLS`. Schema is **introspection-only**: `prisma db pull` against the live
+  DB, never `prisma migrate dev` — `db/migrations/*.sql` remains the source of truth, because
+  the schema uses partitioned tables, `GENERATED ALWAYS` columns, `citext` and `tsvector`
+  that Prisma cannot author. `server/prisma/schema.prisma` is hand-curated after each pull.
+- **`maintPool` is the only remaining raw `pg.Pool`** (`server/src/db.ts`, role `postgres`),
+  used by `scheduler.ts` and `scripts/` for the two things Prisma cannot do: `REFRESH
+  MATERIALIZED VIEW CONCURRENTLY` (can't run inside a transaction, needs the view's owner)
+  and `ensure_monthly_partition()`. The former `appPool` + `withUserTx()` are **gone**.
+- **Authorization is application code, not RLS.** RLS was disabled in migration 017. The 71
+  policies were translated one-to-one into `server/src/scope.ts` and are injected into every
+  query automatically by the Prisma client extension in `server/src/scopedPrisma.ts`. Routes
+  call `dbFor(req.actor)` and query normally; the scope is appended to `where.AND` beneath
+  them. Two fail-closed guards live in that extension:
+  - a model absent from both `SCOPED_MODELS` and `GLOBAL_MODELS` **throws** rather than
+    being served unscoped, so adding a table forces a scoping decision;
+  - any **write** issued outside `withDbSession()` **throws** (see the next bullet).
+- **Writes must go through `withDbSession(actor, fn)`.** Five triggers still enforce real
+  rules — `prevent_privilege_escalation`, `prevent_caller_lead_lifecycle_changes`,
+  `check_caller_lead_customer_link`, `sync_lead_assignment_history`, `log_audit` — and every
+  one branches on `app_current_role()` / `app_current_user_id()`. On a bare Prisma connection
+  those GUCs are NULL, `IF app_current_role() = 'caller'` never matches, and the guards
+  **silently no-op**: a caller could set their own role to `admin`, and `audit_log.changed_by`
+  was written NULL. Both were reproduced live before the guard existed. `withDbSession` opens
+  a transaction, runs `set_app_session()`, and marks the async context (via
+  `AsyncLocalStorage`) so the extension lets the write through. The ALS scope wraps the whole
+  `$transaction` deliberately — Prisma's model methods return *lazy* promises, so wrapping
+  only the callback would let `(tx) => tx.x.create(...)` escape the scope.
 - **Auth**: opaque bearer token, stored server-side as `'sha256:' + sha256(token)` in
-  `sessions`. `requireAuth` middleware resolves it via a `SECURITY DEFINER` helper
-  (`auth_session_lookup`) since RLS would otherwise block reading `users`/`sessions` before
-  any session context exists.
-- **Authorization = RLS**, not app code. Route handlers just interpret what RLS already did:
-  a 0-row UPDATE/DELETE → 404 ("masked not found" — the row exists, RLS just filtered it
-  out); a trigger `RAISE EXCEPTION` (P0001) → 403; unique/check/FK violations → 409/400/400.
-  See `server/src/errors.ts` for the full pg-code table and the friendly per-constraint
-  message map.
+  `sessions`. `requireAuth` resolves it with a single scope-free Prisma query joining
+  `sessions → users`. The old `SECURITY DEFINER` helpers (`auth_session_lookup`,
+  `auth_login_lookup`) existed only because RLS blocked reading `users`/`sessions` before a
+  session existed; they remain in the DB but are no longer called.
+- **Error mapping** (`server/src/errors.ts`): a 0-row UPDATE/DELETE → 404 ("masked not
+  found" — the row exists, the scope filtered it out); a trigger `RAISE EXCEPTION` (P0001) →
+  403; unique/check/FK violations → 409/400/400. Prisma's own codes (P2002/P2003/P2025) map
+  too. Note Prisma wraps PL/pgSQL errors as **P2010** with the real SQLSTATE buried at
+  `meta.driverAdapterError.cause.code` — `unwrapRawPgError()` digs it out, which is what
+  keeps trigger rejections surfacing as 403 rather than 500.
 - **Two lookup-table patterns coexist** in this schema — don't assume one when reading code:
   some fields (lead status, lead source, order stage, payment status, follow-up type/status)
   are `text` columns with an FK to a small `*_statuses`/`*_types` lookup table (migration 002
@@ -120,7 +154,7 @@ was hit and fixed once already — see "Gotchas" below.
   order — several columns (`disease`, `stock_quantity`) exist live but aren't in `schema.sql`,
   and one column (`priority`) is in `schema.sql` but no longer exists live.
 
-## Migration history (001-012)
+## Migration history (001-017)
 
 | # | What it did |
 |---|---|
@@ -136,6 +170,11 @@ was hit and fixed once already — see "Gotchas" below.
 | 010 | Added `products.stock_quantity`; `convert_lead_to_order()` now decrements it per converted medicine line, floored at 0 (never blocks the sale — a pharmacy fulfills and restocks, it doesn't refuse a sale over a stale counter) |
 | 011 | Added `leads.disease` (free text) — the new required intake field, replacing the old "medicines chosen at creation" flow |
 | 012 | **Removed `leads.priority` entirely** — column, both indexes that referenced it, `lead_priorities` lookup table, and rebuilt `mv_lead_status_breakdown` without it (the dashboard's own query already aggregated that view with `GROUP BY status` only, ignoring priority, so this was a no-op for actual dashboard output) |
+| 013 | Renamed lead status `closed` -> `sold`; added `leads.payment_screenshot` |
+| 014 | `convert_lead_to_order()` now produces a paid order for a sold lead |
+| 015 | Order-level flat/percentage discount |
+| 016 | **Prisma cutover, part 1** — created role `app_prisma` with `BYPASSRLS`, mirroring `app_user`'s grants (minus writes on `audit_log`/`lead_assignments`) plus EXECUTE on the `SECURITY DEFINER` helpers. Deliberately a *second* role so both drivers could coexist during the route-by-route migration |
+| 017 | **Prisma cutover, part 2** — `DISABLE ROW LEVEL SECURITY` on all 20 tables and revoked `app_user`'s LOGIN. The 71 policies are **disabled, not dropped**: they are the written record the TypeScript in `scope.ts` was derived from, and re-enabling is one `ALTER` per table (rollback block is in the migration). Authorization now lives entirely in application code |
 
 ## Feature history (chronological, why things are the way they are)
 
@@ -206,10 +245,12 @@ partially stale, not gospel. When in doubt, check current code, not old docs.
 
 - **Port collision via shared launch config** — see "Running it locally" above. Each dev
   process needs its own `.claude/launch.json` entry with its own `port`.
-- **RLS bypass via non-`security_invoker` views** — any new view/matview that queries
-  RLS-protected tables must either declare `security_invoker = true` or be understood as
-  intentionally bypassing RLS (matviews always bypass RLS; that's why the scheduler's
-  refresh runs on `maintPool` and the app-layer route code-gates matview reads to admin only).
+- **Unscoped reads via views/matviews** — this used to be an RLS-bypass trap (migration 007
+  fixed two views that were silently showing Callers every row). RLS is gone, but the trap
+  survives in a new form: `scopedPrisma` filters *models*, so any new view or matview must be
+  classified in `SCOPED_MODELS`/`GLOBAL_MODELS` or querying it throws. Matviews are read via
+  raw SQL and are **not** scoped at all — that's why the scheduler's refresh runs on
+  `maintPool` and the routes gate matview reads to admin only. Keep that gate.
 - **Required-field validation across create AND edit** — any field added to a shared
   create/edit form must have its `required` attribute (and any "at least one X required" JS
   guard) conditioned on `!editingLead`, or editing older data that predates the field becomes

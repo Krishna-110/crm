@@ -34,6 +34,16 @@ function num(value: string | number | null | undefined): number {
   return value == null ? 0 : Number(value);
 }
 
+// Whole days between two IST calendar dates. Both sides are reduced to a YYYY-MM-DD
+// wall-clock date in Asia/Kolkata first and then compared as UTC midnights, so the result
+// is a pure calendar-day difference with no DST/offset drift — the same thing Postgres
+// computes with `expiry_date::date - CURRENT_DATE`.
+function istDayDiff(from: Date, to: Date): number {
+  const a = Date.parse(`${dateOnlyFormatter.format(from)}T00:00:00Z`);
+  const b = Date.parse(`${dateOnlyFormatter.format(to)}T00:00:00Z`);
+  return Math.round((a - b) / 86_400_000);
+}
+
 export function serializeUser(row: Row) {
   return {
     id: row.id,
@@ -135,8 +145,38 @@ export function serializeOrderItem(row: Row) {
   };
 }
 
-// Expects a row from renewals_view (adds days_remaining/status over the base table).
+/**
+ * Accepts either a `renewals_view` row (which supplies days_remaining/status) or a plain
+ * `renewals` row, deriving those two fields when absent.
+ *
+ * The derivation exists because Prisma 7 refuses @id on views and Postgres reports every
+ * view column as nullable, which leaves renewals_view with a bare findMany() and no
+ * orderBy/where — and, more importantly, outside the reach of the scoping extension in a
+ * useful way. routes/renewals.ts therefore queries the `renewals` model instead.
+ *
+ * This mirrors the view's own SQL exactly:
+ *   days_remaining = expiry_date::date - CURRENT_DATE
+ *   status         = compute_renewal_status(renewal_date, expiry_date, renewed_at)
+ * with every comparison done on IST calendar dates, because CURRENT_DATE is evaluated in
+ * the database session's Asia/Kolkata timezone — comparing against a UTC "today" would be
+ * a day off for roughly the first six hours of every IST day.
+ */
 export function serializeRenewal(row: Row) {
+  const now = new Date();
+  const expiry = row.expiry_date instanceof Date ? row.expiry_date : row.expiry_date ? new Date(row.expiry_date) : null;
+  const renewal = row.renewal_date instanceof Date ? row.renewal_date : row.renewal_date ? new Date(row.renewal_date) : null;
+
+  const daysRemaining =
+    row.days_remaining != null ? Number(row.days_remaining) : expiry ? istDayDiff(expiry, now) : 0;
+
+  let status = row.status as string | undefined;
+  if (!status) {
+    if (row.renewed_at) status = 'renewed';
+    else if (expiry && istDayDiff(expiry, now) < 0) status = 'overdue';
+    else if (renewal && istDayDiff(renewal, now) <= 0) status = 'due_today';
+    else status = 'upcoming';
+  }
+
   return {
     id: row.id,
     customerId: row.customer_id,
@@ -145,9 +185,9 @@ export function serializeRenewal(row: Row) {
     orderDate: d10(row.order_date),
     renewalDate: d10(row.renewal_date),
     expiryDate: d10(row.expiry_date),
-    daysRemaining: Number(row.days_remaining),
+    daysRemaining,
     assignedCaller: row.assigned_caller_id ?? undefined,
-    status: row.status,
+    status,
   };
 }
 

@@ -1,7 +1,8 @@
 import { app } from './app.js';
 import { config } from './config.js';
 import { startScheduler } from './scheduler.js';
-import { appPool, maintPool } from './db.js';
+import { maintPool } from './db.js';
+import { prisma } from './prisma.js';
 
 const server = app.listen(config.port, () => {
   console.log(`MediCRM API listening on http://localhost:${config.port}`);
@@ -11,7 +12,7 @@ const server = app.listen(config.port, () => {
 async function shutdown(signal: string) {
   console.log(`${signal} received, shutting down...`);
   server.close(async () => {
-    await appPool.end();
+    await prisma.$disconnect();
     await maintPool.end();
     process.exit(0);
   });
