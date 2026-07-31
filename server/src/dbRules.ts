@@ -222,7 +222,9 @@ export async function applyAfterWriteRules(
   _operation: string,
   args: unknown,
   _result: unknown,
+  aggregateContext: string[] = [],
 ): Promise<void> {
+  await applyAggregateRules(model, args, aggregateContext);
   if (model !== 'renewals') return;
   const rows = payloadRows(args);
   const caller = rows.find((r) => 'assigned_caller_id' in r)?.assigned_caller_id;
@@ -241,4 +243,110 @@ export async function applyAfterWriteRules(
     caller,
     where.id,
   );
+}
+
+// ---------------------------------------------------------------------------------------
+// PHASE 3 — derived aggregates
+//
+// update_order_total and maintain_assigned_leads_count both maintained a running total by
+// applying a DELTA computed from OLD and NEW. The extension never sees OLD, so rather than
+// reconstruct it, these RECOMPUTE the aggregate from its source rows.
+//
+// That is deliberately different from the trigger, and better: a delta drifts permanently if
+// a single application is missed or double-applied, whereas a recomputation is idempotent and
+// self-correcting. The triggers' own GREATEST(x, 0) clamps exist precisely because delta
+// arithmetic can go negative — recomputation cannot. The cost is one aggregate query per
+// affected parent, which at any realistic size is nothing next to correctness.
+//
+// The work is finding WHICH parents to recompute. A write can move a row between parents, so
+// both the parents it belonged to BEFORE and the ones named in the payload must be refreshed.
+// Hence a capture step before the write and a recompute after it.
+// ---------------------------------------------------------------------------------------
+
+/** Aggregates maintained here: child model -> how to find and rebuild the parent. */
+const AGGREGATES: Record<
+  string,
+  { fk: string; rebuild: (tx: TxLoose, id: string) => Promise<unknown> }
+> = {
+  order_items: {
+    fk: 'order_id',
+    rebuild: (tx, id) =>
+      tx.$executeRawUnsafe(
+        `UPDATE orders SET total_amount = COALESCE(
+           (SELECT SUM(line_total) FROM order_items WHERE order_id = $1 AND deleted_at IS NULL), 0)
+         WHERE id = $1`,
+        id,
+      ),
+  },
+  leads: {
+    fk: 'assigned_caller_id',
+    rebuild: (tx, id) =>
+      tx.$executeRawUnsafe(
+        `UPDATE users SET assigned_leads_count = COALESCE(
+           (SELECT count(*) FROM leads WHERE assigned_caller_id = $1 AND deleted_at IS NULL), 0)
+         WHERE id = $1`,
+        id,
+      ),
+  },
+};
+
+/** Loosely typed transaction client — model delegates plus the raw escape hatches. */
+type TxLoose = {
+  $queryRawUnsafe: (sql: string, ...v: unknown[]) => Promise<unknown>;
+  $executeRawUnsafe: (sql: string, ...v: unknown[]) => Promise<number>;
+} & Record<string, { findMany?: (a: unknown) => Promise<Record<string, unknown>[]> }>;
+
+async function tx(): Promise<TxLoose | undefined> {
+  const { currentTx } = await import('./scopedPrisma.js');
+  return currentTx() as unknown as TxLoose | undefined;
+}
+
+/**
+ * Parent ids a write is about to affect, read BEFORE it lands.
+ *
+ * Uses the scoped client on purpose: the rows a caller can actually change are the rows in
+ * their scope, so capturing through the same filter matches what the write will touch. Reads
+ * do not re-enter the aggregate logic, so there is no recursion.
+ */
+export async function captureAggregateContext(
+  model: string,
+  operation: string,
+  args: unknown,
+): Promise<string[]> {
+  const agg = AGGREGATES[model];
+  if (!agg) return [];
+  const where = (args as { where?: unknown }).where;
+  if (!where) return []; // create/createMany affect no pre-existing parent
+
+  const client = await tx();
+  const delegate = client?.[model];
+  if (!delegate?.findMany) return [];
+  const rows = await delegate.findMany({ where, select: { [agg.fk]: true } });
+  return rows.map((r) => r[agg.fk]).filter((v): v is string => typeof v === 'string');
+}
+
+/**
+ * Replaces `update_order_total` and `maintain_assigned_leads_count`.
+ *
+ * Recomputes every parent the write could have touched: those captured beforehand, plus any
+ * named in the payload (a row moving to a different parent, or a newly created one).
+ */
+export async function applyAggregateRules(
+  model: string,
+  args: unknown,
+  before: string[],
+): Promise<void> {
+  const agg = AGGREGATES[model];
+  if (!agg) return;
+
+  const ids = new Set(before);
+  for (const row of payloadRows(args)) {
+    const v = row[agg.fk];
+    if (typeof v === 'string') ids.add(v);
+  }
+  if (ids.size === 0) return;
+
+  const client = await tx();
+  if (!client) return;
+  for (const id of ids) await agg.rebuild(client, id);
 }

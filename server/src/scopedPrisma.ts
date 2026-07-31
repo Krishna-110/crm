@@ -1,7 +1,12 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { prisma } from './prisma.js';
 import { ApiError } from './errors.js';
-import { applyBeforeWriteRules, applyBeforeWriteRulesAsync, applyAfterWriteRules } from './dbRules.js';
+import {
+  applyBeforeWriteRules,
+  applyBeforeWriteRulesAsync,
+  applyAfterWriteRules,
+  captureAggregateContext,
+} from './dbRules.js';
 import type { Actor } from './scope.js';
 import {
   customerScope,
@@ -185,15 +190,21 @@ export function scopedPrisma(actor: Actor) {
           // write regardless of scoping, exactly as a BEFORE trigger fired for every row.
           // Every exit below goes through `run`, so an AFTER-write rule cannot be skipped by
           // adding another early return — the mistake a chain of `return query(args)` invites.
+          // Parents an aggregate write is about to affect, read BEFORE it lands — a row can
+          // move between parents, so the old one needs recomputing too and is unfindable
+          // afterwards.
+          let aggregateContext: string[] = [];
+
           const run = async (a: unknown) => {
             const result = await query(a as never);
-            if (WRITE_OPS.has(op)) await applyAfterWriteRules(model, op, a, result);
+            if (WRITE_OPS.has(op)) await applyAfterWriteRules(model, op, a, result, aggregateContext);
             return result;
           };
 
           if (WRITE_OPS.has(op)) {
             applyBeforeWriteRules(model, op, args);
             await applyBeforeWriteRulesAsync(model, op, args);
+            aggregateContext = await captureAggregateContext(model, op, args);
           }
 
           if (GLOBAL_MODELS.has(model)) return run(args);
