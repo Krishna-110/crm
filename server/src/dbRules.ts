@@ -464,3 +464,296 @@ export async function applyValidationRules(model: string, args: unknown): Promis
     await assertCustomerConsistency(model, row);
   }
 }
+
+// ---------------------------------------------------------------------------------------
+// PHASE 5 — privilege enforcement and audit
+//
+// The last rules enforcing anything below the application. Two things change materially:
+//
+// 1. The triggers branched on app_current_role() / app_current_user_id(), read from session
+//    GUCs. TypeScript has the Actor directly, which is strictly better — the NULL-GUC failure
+//    that once let a caller make themselves an admin is not expressible here.
+//
+// 2. log_audit and sync_lead_assignment_history were SECURITY DEFINER, owned by postgres.
+//    That is how they wrote audit_log and lead_assignments while app_prisma held only SELECT
+//    (migration 016 revoked the rest deliberately). Porting them requires granting the
+//    application write access to its own audit trail — see migration 023. The trail stops
+//    being tamper-evident from the application's point of view. That is a real loss, accepted
+//    as part of removing all PL/pgSQL.
+// ---------------------------------------------------------------------------------------
+
+export type RuleActor = { userId: string; role: 'admin' | 'caller' };
+
+/** Columns a caller may never change on a user row (prevent_privilege_escalation). */
+const CALLER_IMMUTABLE_USER_COLUMNS = ['role', 'status', 'employee_id'] as const;
+
+/**
+ * Replaces `prevent_privilege_escalation`.
+ *
+ * The trigger compared NEW against OLD, so setting a column to its existing value was
+ * allowed. That comparison is preserved by reading the current row rather than rejecting on
+ * the mere presence of the key — a PATCH that echoes back unchanged fields is a normal thing
+ * for a client to do, and rejecting it would be a behaviour change.
+ */
+async function assertNoPrivilegeEscalation(actor: RuleActor, args: unknown): Promise<void> {
+  if (actor.role === 'admin') return;
+  const rows = payloadRows(args);
+  const touched = CALLER_IMMUTABLE_USER_COLUMNS.filter((c) => rows.some((r) => c in r));
+  if (touched.length === 0) return;
+
+  const where = (args as { where?: { id?: unknown } }).where;
+  const client = await tx();
+  if (!client || typeof where?.id !== 'string') return;
+
+  const current = ((await client.$queryRawUnsafe(
+    `SELECT role::text AS role, status::text AS status, employee_id FROM users WHERE id = $1`,
+    where.id,
+  )) as Row[])[0];
+  if (!current) return;
+
+  for (const row of rows) {
+    for (const col of touched) {
+      if (col in row && row[col] !== current[col]) {
+        const { ApiError } = await import('./errors.js');
+        throw ApiError.forbidden('callers may not modify role, status, or employee_id');
+      }
+    }
+  }
+}
+
+/** Replaces `prevent_caller_lead_lifecycle_changes`. */
+async function assertNoCallerLifecycleChange(actor: RuleActor, args: unknown): Promise<void> {
+  if (actor.role === 'admin') return;
+  const rows = payloadRows(args);
+  if (!rows.some((r) => 'deleted_at' in r)) return;
+
+  const where = (args as { where?: { id?: unknown } }).where;
+  const client = await tx();
+  if (!client || typeof where?.id !== 'string') {
+    // No single row to compare against — a caller changing deleted_at in bulk is refused
+    // outright, which is the safe reading of a guard that exists to stop exactly that.
+    const { ApiError } = await import('./errors.js');
+    throw ApiError.forbidden('callers may not soft-delete or restore leads');
+  }
+  const current = ((await client.$queryRawUnsafe(
+    `SELECT deleted_at FROM leads WHERE id = $1`, where.id,
+  )) as Row[])[0];
+  const now = rows.find((r) => 'deleted_at' in r)!.deleted_at ?? null;
+  const was = current?.deleted_at ?? null;
+  if (String(now) !== String(was)) {
+    const { ApiError } = await import('./errors.js');
+    throw ApiError.forbidden('callers may not soft-delete or restore leads');
+  }
+}
+
+/** Replaces `check_caller_lead_customer_link`. */
+async function assertCallerCustomerLink(actor: RuleActor, args: unknown): Promise<void> {
+  if (actor.role === 'admin') return;
+  for (const row of payloadRows(args)) {
+    if (typeof row.customer_id !== 'string') continue;
+    const client = await tx();
+    if (!client) return;
+    const rows = (await client.$queryRawUnsafe(
+      `SELECT 1 AS ok FROM customers WHERE id = $1 AND primary_mobile = $2`,
+      row.customer_id,
+      row.mobile ?? null,
+    )) as Row[];
+    if (rows.length === 0) {
+      const { ApiError } = await import('./errors.js');
+      throw ApiError.forbidden(
+        "callers may only link a lead to a customer whose primary_mobile matches the lead's own mobile field",
+      );
+    }
+  }
+}
+
+/** Privilege guards for one write. */
+export async function applySecurityRules(
+  model: string,
+  actor: RuleActor,
+  args: unknown,
+): Promise<void> {
+  if (model === 'users') await assertNoPrivilegeEscalation(actor, args);
+  if (model === 'leads') {
+    await assertNoCallerLifecycleChange(actor, args);
+    await assertCallerCustomerLink(actor, args);
+  }
+}
+
+/** Tables log_audit was attached to. audit_log itself is not audited. */
+const AUDITED = new Set([
+  'customers', 'follow_ups', 'lead_assignments', 'leads',
+  'order_items', 'orders', 'products', 'renewals', 'users',
+]);
+
+/** Rows captured before a write, so an AFTER rule can see what changed. */
+export type WriteContext = {
+  aggregateIds: string[];
+  /** Full rows keyed by id, for audit diffing and assignment history. */
+  before: Map<string, Row>;
+};
+
+/** Reads the rows a write is about to touch. */
+async function snapshot(model: string, args: unknown): Promise<Map<string, Row>> {
+  const out = new Map<string, Row>();
+  const where = (args as { where?: unknown }).where;
+  if (!where) return out;
+  const client = await tx();
+  const delegate = client?.[model] as { findMany?: (a: unknown) => Promise<Row[]> } | undefined;
+  if (!delegate?.findMany) return out;
+  for (const row of await delegate.findMany({ where })) {
+    if (typeof row.id === 'string') out.set(row.id, row);
+  }
+  return out;
+}
+
+export async function captureWriteContext(
+  model: string,
+  operation: string,
+  args: unknown,
+): Promise<WriteContext> {
+  const needsRows = AUDITED.has(model) || model === 'leads';
+  return {
+    aggregateIds: await captureAggregateContext(model, operation, args),
+    before: needsRows ? await snapshot(model, args) : new Map(),
+  };
+}
+
+/** search_vector is excluded from audit payloads, exactly as `to_jsonb(NEW) - 'search_vector'` did. */
+function auditable(row: Row): Row {
+  const { search_vector: _drop, ...rest } = row;
+  return rest;
+}
+
+/**
+ * Replaces `log_audit`.
+ *
+ * Records only the columns that actually changed, matching the trigger's key-by-key diff.
+ * INSERT records the whole new row, DELETE the whole old one.
+ */
+async function writeAudit(
+  model: string,
+  operation: string,
+  actor: RuleActor,
+  before: Map<string, Row>,
+  args: unknown,
+  result: unknown,
+): Promise<void> {
+  if (!AUDITED.has(model)) return;
+  const client = await tx();
+  if (!client) return;
+
+  const isDelete = operation.startsWith('delete');
+  const isCreate = operation.startsWith('create');
+
+  // Which rows to record. Creates come from the result; everything else from the snapshot.
+  let ids: string[] = [...before.keys()];
+  if (isCreate) {
+    const created = Array.isArray(result) ? result : [result];
+    ids = created.map((r) => (r as Row)?.id).filter((v): v is string => typeof v === 'string');
+  }
+  if (ids.length === 0) return;
+
+  const after = isDelete ? new Map<string, Row>() : await snapshot(model, { where: { id: { in: ids } } });
+
+  for (const id of ids) {
+    const oldRow = before.get(id);
+    const newRow = after.get(id);
+    let oldData: Row | null = null;
+    let newData: Row | null = null;
+
+    if (isCreate) {
+      newData = newRow ? auditable(newRow) : null;
+    } else if (isDelete) {
+      oldData = oldRow ? auditable(oldRow) : null;
+    } else if (oldRow && newRow) {
+      const o = auditable(oldRow);
+      const n = auditable(newRow);
+      const od: Row = {}, nd: Row = {};
+      for (const k of Object.keys(n)) {
+        if (JSON.stringify(o[k] ?? null) !== JSON.stringify(n[k] ?? null)) { od[k] = o[k]; nd[k] = n[k]; }
+      }
+      if (Object.keys(nd).length === 0) continue; // nothing changed — trigger logged nothing
+      oldData = od; newData = nd;
+    }
+
+    await client.$executeRawUnsafe(
+      `INSERT INTO audit_log (table_name, record_id, action, changed_by, changed_at, old_data, new_data)
+       VALUES ($1, $2, $3::audit_action, $4, now(), $5::jsonb, $6::jsonb)`,
+      model,
+      id,
+      isCreate ? 'INSERT' : isDelete ? 'DELETE' : 'UPDATE',
+      actor.userId,
+      oldData ? JSON.stringify(oldData) : null,
+      newData ? JSON.stringify(newData) : null,
+    );
+  }
+}
+
+/**
+ * Replaces `sync_lead_assignment_history`: maintains lead_assignments, and keeps
+ * follow_ups.assigned_caller_id in step when a lead is reassigned.
+ */
+async function syncAssignmentHistory(
+  actor: RuleActor,
+  before: Map<string, Row>,
+  args: unknown,
+  result: unknown,
+  operation: string,
+): Promise<void> {
+  const client = await tx();
+  if (!client) return;
+  const isCreate = operation.startsWith('create');
+
+  const rows: { id: string; oldCaller: string | null; newCaller: string | null }[] = [];
+  if (isCreate) {
+    const created = Array.isArray(result) ? result : [result];
+    for (const r of created as Row[]) {
+      if (typeof r?.id === 'string') {
+        rows.push({ id: r.id, oldCaller: null, newCaller: (r.assigned_caller_id as string) ?? null });
+      }
+    }
+  } else {
+    const payload = payloadRows(args).find((r) => 'assigned_caller_id' in r);
+    if (!payload) return;
+    for (const [id, old] of before) {
+      rows.push({
+        id,
+        oldCaller: (old.assigned_caller_id as string) ?? null,
+        newCaller: (payload.assigned_caller_id as string) ?? null,
+      });
+    }
+  }
+
+  for (const { id, oldCaller, newCaller } of rows) {
+    if (oldCaller === newCaller) continue;
+    if (oldCaller) {
+      await client.$executeRawUnsafe(
+        `UPDATE lead_assignments SET unassigned_at = now()
+          WHERE lead_id = $1 AND caller_id = $2 AND unassigned_at IS NULL`, id, oldCaller);
+    }
+    if (newCaller) {
+      await client.$executeRawUnsafe(
+        `INSERT INTO lead_assignments (lead_id, caller_id, assigned_by, assigned_at)
+         VALUES ($1, $2, $3, now())`, id, newCaller, actor.userId);
+    }
+    // The trigger also kept follow_ups in lockstep with the owning lead's reassignment.
+    await client.$executeRawUnsafe(
+      `UPDATE follow_ups SET assigned_caller_id = $1
+        WHERE lead_id = $2 AND deleted_at IS NULL
+          AND assigned_caller_id IS DISTINCT FROM $1`, newCaller, id);
+  }
+}
+
+/** Phase 5 AFTER-write work. */
+export async function applySecurityAfterRules(
+  model: string,
+  operation: string,
+  actor: RuleActor,
+  ctx: WriteContext,
+  args: unknown,
+  result: unknown,
+): Promise<void> {
+  if (model === 'leads') await syncAssignmentHistory(actor, ctx.before, args, result, operation);
+  await writeAudit(model, operation, actor, ctx.before, args, result);
+}

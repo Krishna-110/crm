@@ -5,7 +5,10 @@ import {
   applyBeforeWriteRules,
   applyBeforeWriteRulesAsync,
   applyAfterWriteRules,
-  captureAggregateContext,
+  applySecurityRules,
+  applySecurityAfterRules,
+  captureWriteContext,
+  type WriteContext,
 } from './dbRules.js';
 import type { Actor } from './scope.js';
 import {
@@ -193,18 +196,23 @@ export function scopedPrisma(actor: Actor) {
           // Parents an aggregate write is about to affect, read BEFORE it lands — a row can
           // move between parents, so the old one needs recomputing too and is unfindable
           // afterwards.
-          let aggregateContext: string[] = [];
+          let ctx: WriteContext = { aggregateIds: [], before: new Map() };
 
           const run = async (a: unknown) => {
             const result = await query(a as never);
-            if (WRITE_OPS.has(op)) await applyAfterWriteRules(model, op, a, result, aggregateContext);
+            if (WRITE_OPS.has(op)) {
+              await applyAfterWriteRules(model, op, a, result, ctx.aggregateIds);
+              await applySecurityAfterRules(model, op, actor, ctx, a, result);
+            }
             return result;
           };
 
           if (WRITE_OPS.has(op)) {
             applyBeforeWriteRules(model, op, args);
             await applyBeforeWriteRulesAsync(model, op, args);
-            aggregateContext = await captureAggregateContext(model, op, args);
+            // Privilege guards run before anything is written, as the BEFORE triggers did.
+            await applySecurityRules(model, actor, args);
+            ctx = await captureWriteContext(model, op, args);
           }
 
           if (GLOBAL_MODELS.has(model)) return run(args);
