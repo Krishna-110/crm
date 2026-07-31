@@ -181,6 +181,7 @@ async function main() {
       ['Farah Khan', '9966554433', 'Hyderabad', 'Diabetes Type 2', 'new', null as unknown as string, 1],
     ];
 
+    const created: Record<string, string> = {};
     for (const [customerName, mobile, city, disease, status, caller, ago] of leads) {
       const lead = await prisma.lead.create({
         data: {
@@ -202,6 +203,7 @@ async function main() {
       if (caller) {
         await prisma.leadAssignment.create({ data: { leadId: lead.id, callerId: caller, assignedBy: admin, assignedAt: at(-ago) } });
       }
+      created[customerName] = lead.id;
     }
 
     // Counters are the application's job now, so the seed maintains them explicitly.
@@ -214,14 +216,20 @@ async function main() {
     console.log(`  leads (${leads.length}) + activities + assignments`);
 
     // One converted customer with an order and a renewal, so the pipeline has a worked example.
+    const rameshLeadId = created['Ramesh Gupta']!;
     const customer = await prisma.customer.create({
       data: { fullName: 'Ramesh Gupta', primaryMobile: '9876543210', city: 'Mumbai', state: 'Maharashtra', pincode: '400001' },
+    });
+    await prisma.lead.update({
+      where: { id: rameshLeadId },
+      data: { customerId: customer.id, status: 'converted' },
     });
     const qty = 2;
     const line = Number(glycomet.unitPrice) * qty;
     const order = await prisma.order.create({
       data: {
-        orderNumber: 'ORD-0001', customerId: customer.id, customerName: customer.fullName,
+        orderNumber: 'ORD-0001', customerId: customer.id, leadId: rameshLeadId,
+        customerName: customer.fullName,
         shippingAddress: 'Mumbai main road', totalAmount: line, payableAmount: line,
         paymentStatus: 'paid', stage: 'delivered', createdBy: admin, createdAt: at(-10),
         items: {
