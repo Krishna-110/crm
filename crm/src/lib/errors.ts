@@ -81,6 +81,19 @@ export function errorMiddleware(err: unknown, _req: Request, res: Response, _nex
     return;
   }
 
+  // express.json() throws a SyntaxError on a malformed body. Without this it reaches the
+  // catch-all below and a client's bad JSON is reported as a server fault — a 500 that says
+  // "we broke" when the request was never valid.
+  if (
+    err instanceof SyntaxError &&
+    'status' in err &&
+    (err as SyntaxError & { status?: number }).status === 400 &&
+    'body' in err
+  ) {
+    res.status(400).json({ error: 'Malformed JSON in request body' });
+    return;
+  }
+
   if (isPrismaError(err)) {
     const status = PRISMA_STATUS[err.code!];
     if (status) {
@@ -111,4 +124,19 @@ export function route<T extends Request>(
   return (req: Request, res: Response, next: NextFunction) => {
     handler(req as T, res).catch(next);
   };
+}
+
+/**
+ * A required route parameter, as a string.
+ *
+ * Express 5 types params as `string | string[] | undefined` because a route pattern can
+ * repeat a name. Ours never do, so this narrows once here rather than casting at every call
+ * site — and turns a malformed URL into a 400 instead of a type assertion that lies.
+ */
+export function param(req: { params: Record<string, unknown> }, name: string): string {
+  const value = req.params[name];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw ApiError.badRequest(`${name} is required in the path`);
+  }
+  return value;
 }
