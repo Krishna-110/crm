@@ -1,5 +1,11 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import { defineConfig, devices } from '@playwright/test';
+
+// The server's configuration lives in server/.env. Plain `dotenv/config` reads ./.env relative
+// to the working directory, which here is the workspace root — a file that does not exist — so
+// it loaded nothing at all and DATABASE_URL stayed undefined. Real environment variables still
+// win over both files, which is what lets CI supply its own.
+dotenv.config({ path: ['.env', 'server/.env'], quiet: true });
 
 /**
  * Phase 5 — end-to-end, in a real browser.
@@ -22,13 +28,33 @@ const WEB_PORT = 5174;
 const BASE_URL = `http://localhost:${WEB_PORT}`;
 
 /**
- * dotenv does not overwrite variables that are already set, so a DATABASE_URL passed to the
- * child process here wins over the one in server/.env. That is what redirects the API to the
- * test database.
+ * Where the API is pointed. dotenv does not overwrite variables that are already set, so a
+ * DATABASE_URL passed to the child process below wins over the one in server/.env — that is
+ * what redirects the API away from the development database.
+ *
+ * Derived from DATABASE_URL by swapping in the test database name, the same derivation
+ * build-test-db.ts and vitest.config.ts already perform, so all three agree by construction.
+ *
+ * This used to be a hardcoded fallback carrying one machine's credentials. It made the suite
+ * pass here and fail anywhere else, and the failure was mute: the API could not connect, so
+ * /api/health never answered and the run died on a readiness timeout naming no cause.
  */
-const TEST_DATABASE_URL =
-  process.env.E2E_DATABASE_URL ??
-  'postgresql://postgres:root@localhost:5432/crm_test?schema=public';
+const TEST_DB = process.env.TEST_PGDATABASE ?? 'crm_test';
+
+const TEST_DATABASE_URL = (() => {
+  if (process.env.E2E_DATABASE_URL) return process.env.E2E_DATABASE_URL;
+  const raw = process.env.DATABASE_URL;
+  if (!raw) {
+    throw new Error(
+      'DATABASE_URL is not set, so the test database URL cannot be derived. Set it in ' +
+        'server/.env, or pass E2E_DATABASE_URL to override. Refusing to guess: a wrong guess ' +
+        'here points a destructive rebuild at the wrong database.',
+    );
+  }
+  const url = new URL(raw);
+  url.pathname = `/${TEST_DB}`;
+  return url.toString();
+})();
 
 export default defineConfig({
   testDir: './e2e',
