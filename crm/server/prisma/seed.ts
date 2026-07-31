@@ -248,6 +248,20 @@ async function main() {
         assignedCallerId: sneha, createdBy: admin,
       },
     });
+    // A second renewal owned by a DIFFERENT caller. Without it every renewal belongs to one
+    // person, and any test asserting that scoping narrows this model passes vacuously.
+    const customer2 = await prisma.customer.create({
+      data: { fullName: 'Anil Kumar', primaryMobile: '9812345670', city: 'Delhi', state: 'Delhi', pincode: '110001' },
+    });
+    await prisma.renewal.create({
+      data: {
+        customerId: customer2.id, customerName: customer2.fullName,
+        productId: atorva.id, medicineName: atorva.brandName!,
+        orderDate: at(-30), renewalDate: at(-4), expiryDate: at(-1),   // overdue, for status coverage
+        assignedCallerId: ananya, createdBy: admin,
+      },
+    });
+
     await prisma.followUp.create({
       data: {
         customerId: customer.id, customerName: customer.fullName,

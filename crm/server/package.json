@@ -12,7 +12,9 @@
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "tsc --noEmit && vitest run",
+    "test:watch": "vitest",
+    "test:db": "tsx scripts/build-test-db.ts"
   },
   "keywords": [],
   "author": "",

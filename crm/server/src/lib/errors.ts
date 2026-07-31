@@ -52,21 +52,39 @@ const CONSTRAINT_MESSAGES: Record<string, string> = {
   orders_order_number_key: 'That order number is already in use',
 };
 
-type PrismaLikeError = { code?: string; meta?: { target?: unknown; modelName?: unknown } };
+type PrismaLikeError = {
+  code?: string;
+  meta?: {
+    modelName?: unknown;
+    driverAdapterError?: { cause?: { originalMessage?: unknown; constraint?: { fields?: unknown } } };
+  };
+};
 
 function isPrismaError(err: unknown): err is PrismaLikeError {
   return typeof err === 'object' && err !== null && typeof (err as PrismaLikeError).code === 'string';
 }
 
-/** Prisma reports the offending unique index in meta.target, as a column list or index name. */
+/**
+ * The friendlier message for a unique violation, if we have one.
+ *
+ * Prisma 7 does not populate `meta.target`. The index name is only available inside the
+ * driver adapter's original Postgres message, so it is read from there — with the model and
+ * field names as a fallback in case that wording changes.
+ */
 function constraintMessage(err: PrismaLikeError): string | undefined {
-  const target = err.meta?.target;
-  const key = Array.isArray(target) ? target.join('_') : typeof target === 'string' ? target : undefined;
-  if (!key) return undefined;
-  return (
-    CONSTRAINT_MESSAGES[key] ??
-    CONSTRAINT_MESSAGES[`${String(err.meta?.modelName ?? '').toLowerCase()}s_${key}_key`]
-  );
+  const cause = err.meta?.driverAdapterError?.cause;
+
+  const original = typeof cause?.originalMessage === 'string' ? cause.originalMessage : '';
+  const named = /constraint "([^"]+)"/.exec(original)?.[1];
+  if (named && CONSTRAINT_MESSAGES[named]) return CONSTRAINT_MESSAGES[named];
+
+  const fields = Array.isArray(cause?.constraint?.fields) ? (cause!.constraint!.fields as string[]) : [];
+  const model = String(err.meta?.modelName ?? '').toLowerCase();
+  if (model && fields.length) {
+    const key = `${model}s_${fields.join('_')}_key`;
+    if (CONSTRAINT_MESSAGES[key]) return CONSTRAINT_MESSAGES[key];
+  }
+  return undefined;
 }
 
 /**
