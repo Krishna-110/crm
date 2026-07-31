@@ -77,10 +77,19 @@ jobs:
             package-lock.json
             server/package-lock.json
 
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm ci --prefix server
+      - name: Environment
+        run: node --version && npm --version && psql --version
+
+      # Split so a failure names the offending install instead of one opaque step, and run
+      # the server install with working-directory rather than `npm ci --prefix server`:
+      # --prefix resolves config and lifecycle scripts relative to the CURRENT directory, not
+      # the prefix, which behaves differently across npm versions and platforms.
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
 
       - name: Generate Prisma client
         # Introspection-only workflow: the client is generated from the committed
@@ -152,10 +161,19 @@ jobs:
             package-lock.json
             server/package-lock.json
 
-      - name: Install dependencies
-        run: |
-          npm ci
-          npm ci --prefix server
+      - name: Environment
+        run: node --version && npm --version && psql --version
+
+      # Split so a failure names the offending install instead of one opaque step, and run
+      # the server install with working-directory rather than `npm ci --prefix server`:
+      # --prefix resolves config and lifecycle scripts relative to the CURRENT directory, not
+      # the prefix, which behaves differently across npm versions and platforms.
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install server dependencies
+        run: npm ci
+        working-directory: server
 
       - name: Generate Prisma client
         run: npx prisma generate
