@@ -164,8 +164,9 @@ export function Login() {
 
           <form onSubmit={handleSubmit} className="mt-8 space-y-4">
             <div>
-              <label className="field-label">Email address</label>
+              <label className="field-label" htmlFor="login-email-address">Email address</label>
               <input
+                id="login-email-address"
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -175,12 +176,13 @@ export function Login() {
             </div>
             <div>
               <div className="flex items-center justify-between">
-                <label className="field-label">Password</label>
+                <label className="field-label" htmlFor="login-password">Password</label>
                 <button type="button" className="mb-1.5 text-xs font-medium text-primary-600 hover:text-primary-700">
                   Forgot?
                 </button>
               </div>
               <input
+                id="login-password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

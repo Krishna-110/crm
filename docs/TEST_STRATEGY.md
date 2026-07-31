@@ -21,7 +21,7 @@ run in ~4s against an isolated database.
 |---|---|
 | Test runner | Vitest ✅ — `npm --prefix server test` |
 | Suites | Phase 1 ✅ (48) · Phase 2 ✅ (71) · Phase 3 ✅ (50) · Phase 4 ✅ (26) — 195 tests, ~20s |
-| End-to-end | Phase 5 ✅ (27 Playwright, ~2m) — `npm run test:e2e` |
+| End-to-end | Phase 5 ✅ (40 Playwright, ~3m) — `npm run test:e2e`, incl. a standing a11y audit |
 | Test database | `medcrm_test` ✅ — `npm --prefix server run test:db` |
 | Reset tooling | `server/scripts/reset-test-data.ts` ✅ (dev DB) |
 | Typecheck | `npm --prefix server run typecheck` ✅ — covers `tests/` |
@@ -252,16 +252,47 @@ phrase (`"4 total leads"`) *and* that the admin's total is absent — which take
 mutant from 1 failure to 2. Reverting the dashboard breakdown to the matview fails the
 consistency regression.
 
-**Two accessibility gaps surfaced while writing this** (not fixed — they are app changes, not
-test changes):
+**Two accessibility gaps surfaced while writing this — both since fixed:**
 
-- Lead-form labels are plain `<label class="field-label">` with no `htmlFor`, and the inputs
-  have no `id` or `aria-label`. Nothing associates them, so `getByLabel()` cannot find them
-  and a screen reader would not announce them.
-- `SearchableSelect` renders options as bare `<button>` elements with no `role="listbox"` /
-  `role="option"`, so it is not announced as a combobox.
+- Lead-form labels were plain `<label class="field-label">` with no `htmlFor`, and the inputs
+  had no `id`. All 37 now carry `htmlFor`/`id`.
+- `SearchableSelect` rendered options as bare `<button>` elements with no roles. It now
+  implements the ARIA 1.2 combobox pattern (`role="combobox"` + `aria-expanded` /
+  `aria-controls` / `aria-activedescendant`, `role="listbox"`, `role="option"`), and takes an
+  `ariaLabel` prop. Without one its only name was the placeholder — the last-resort source in
+  the accessible-name algorithm, and identical for every row, so two medicine rows both
+  announced as `combobox "Search medicines..."`. They are now "Medicine 1" / "Medicine 2",
+  with the day inputs named to match.
 
-Both are worked around in `e2e/helpers.ts` by walking the DOM, with the reason noted inline.
+  Guarded by an `toMatchAriaSnapshot` assertion in `e2e/leads.spec.ts` that pins the whole
+  group's accessibility tree — removing a label fails it.
+
+**`e2e/a11y.spec.ts` now audits the whole app on every run**, because both fixes above looked
+complete in the JSX and were not. It asserts two things per page, for both roles, plus the
+three modal forms and the dynamic `/leads/:id` route:
+
+1. no interactive control is unnamed;
+2. no control is named **only** by its placeholder.
+
+The second check is the one that earns its keep. A placeholder satisfies the accessible-name
+algorithm, so an unlabelled field passes check 1 — but it is the last-resort source, reads as
+an instruction, and is usually identical across repeated rows.
+
+Sweeping the app with it found, and fixed: all six search inputs (`SearchInput` now *requires*
+an `ariaLabel`, so a new one cannot be added unnamed — the compiler caught a call site the
+moment it became required), the 16 icon-only edit/delete buttons on `/users` (now named per
+row, e.g. "Edit Sneha Iyer"), the calendar's prev/next arrows (labelled by the active view),
+the lead detail back button, and the lead comment box.
+
+One methodology note worth keeping: the first version of this probe reported `/users` as
+clean when it had 18 unnamed buttons — it snapshotted before the table rows rendered. The
+suite now waits for `networkidle` first. **An accessibility audit that runs too early passes
+because there is nothing to audit.**
+
+`e2e/helpers.ts` was reverted from DOM-walking to the standard `getByLabel()` and
+`getByRole('option')` queries, and the suite still passes — which is the proof the fix is
+real, because those queries read the same accessibility tree a screen reader does. They
+matched nothing before. Keeping them in the tests means a regression fails the suite.
 
 A third thing looked like a defect and **was not**: omitting the required medicine row blocks
 submission and appeared to do so silently. It does not — the browser shows its native

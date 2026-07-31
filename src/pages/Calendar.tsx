@@ -534,6 +534,7 @@ export function Calendar() {
               viewMode === 'weekly' ? navigateWeek(-1) :
               navigateDay(-1)
             }
+            aria-label={`Previous ${viewMode === 'monthly' ? 'month' : viewMode === 'weekly' ? 'week' : 'day'}`}
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
@@ -549,6 +550,7 @@ export function Calendar() {
               viewMode === 'weekly' ? navigateWeek(1) :
               navigateDay(1)
             }
+            aria-label={`Next ${viewMode === 'monthly' ? 'month' : viewMode === 'weekly' ? 'week' : 'day'}`}
           >
             <ChevronRight className="w-4 h-4" />
           </button>

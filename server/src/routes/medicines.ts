@@ -92,7 +92,6 @@ medicinesRouter.patch('/:id', async (req, res) => {
 medicinesRouter.post('/:id/stock', async (req, res) => {
   const actor = req.actor!;
   requireAdmin(actor);
-  const db = dbFor(actor);
 
   const body = req.body ?? {};
   const { mode, quantity } = body;

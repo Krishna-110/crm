@@ -25,7 +25,6 @@ notificationsRouter.get('/', async (req, res) => {
 
 notificationsRouter.patch('/:id/read', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
 
   // notifications is a partitioned table with a composite PK (id, created_at), so there
   // is no single-column unique key for Prisma's `update` to target — updateMany scoped by

@@ -19,7 +19,6 @@ followUpsRouter.get('/', async (req, res) => {
 
 followUpsRouter.patch('/:id', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
   const status = req.body?.status;
   if (!status) throw ApiError.badRequest('status is required');
 

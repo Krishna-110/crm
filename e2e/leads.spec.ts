@@ -31,6 +31,31 @@ test.describe('lead creation', () => {
     await expect(page.locator('main')).toContainText(`${FIXTURE.admin.leads + 1} total leads`);
   });
 
+  test('the medicine picker is exposed correctly to assistive technology', async ({ page }) => {
+    // Guards the ARIA combobox work. Every control must carry a real name, and repeated rows
+    // must be distinguishable: before this, both rows announced as `combobox "Search
+    // medicines..."` — named only by placeholder, which is the last-resort source in the
+    // accessible-name algorithm and identical for every row.
+    await login(page, ADMIN);
+    await page.goto('/leads');
+    await page.getByRole('button', { name: 'Add Lead' }).click();
+    await page.getByRole('button', { name: /add another medicine/i }).click();
+    await page.getByRole('combobox').first().fill('Atorva');
+    await page.getByRole('option').first().waitFor();
+
+    await expect(page.locator('[role="group"]').first()).toMatchAriaSnapshot(`
+      - group "Medicines Required":
+        - combobox "Medicine 1" [expanded]
+        - listbox:
+          - option /Atorva/
+        - spinbutton "Days supply for medicine 1"
+        - button "Remove medicine"
+        - combobox "Medicine 2"
+        - spinbutton "Days supply for medicine 2"
+        - button "Remove medicine"
+    `);
+  });
+
   test('the form refuses to submit without the required fields', async ({ page }) => {
     await login(page, ADMIN);
     await page.goto('/leads');

@@ -39,3 +39,30 @@ server/.env
 /playwright-report/
 /blob-report/
 /playwright/.cache/
+
+# Environment / secrets — never commit any of these
+.env
+.env.*
+!.env.example
+server/.env.*
+!server/.env.example
+
+# Build & tool caches
+*.tsbuildinfo
+.cache/
+coverage/
+.turbo/
+.eslintcache
+
+# OS cruft
+Thumbs.db
+desktop.ini
+ehthumbs.db
+
+# Scratch / temporary working files
+tmp/
+temp/
+*.bak
+*.orig
+*.rej
+*~

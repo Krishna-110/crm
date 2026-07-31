@@ -121,6 +121,7 @@ export function TopNav({ title, onMenuClick }: TopNavProps) {
           <Search className="absolute left-3.5 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-ink-400 transition-colors group-focus-within:text-primary-500" />
           <input
             type="text"
+            aria-label="Search leads, orders and customers"
             placeholder="Search leads, orders, customers..."
             value={state.searchQuery}
             onChange={(e) => dispatch({ type: 'SET_SEARCH_QUERY', payload: { query: e.target.value } })}
@@ -250,8 +251,9 @@ export function TopNav({ title, onMenuClick }: TopNavProps) {
       >
         <form onSubmit={handleChangePassword} className="space-y-4">
           <div>
-            <label className="field-label">Current Password</label>
+            <label className="field-label" htmlFor="topnav-current-password">Current Password</label>
             <input
+              id="topnav-current-password"
               type="password"
               required
               value={pwForm.current}
@@ -260,8 +262,9 @@ export function TopNav({ title, onMenuClick }: TopNavProps) {
             />
           </div>
           <div>
-            <label className="field-label">New Password</label>
+            <label className="field-label" htmlFor="topnav-new-password">New Password</label>
             <input
+              id="topnav-new-password"
               type="password"
               required
               minLength={6}
@@ -272,8 +275,9 @@ export function TopNav({ title, onMenuClick }: TopNavProps) {
             />
           </div>
           <div>
-            <label className="field-label">Confirm New Password</label>
+            <label className="field-label" htmlFor="topnav-confirm-new-password">Confirm New Password</label>
             <input
+              id="topnav-confirm-new-password"
               type="password"
               required
               minLength={6}

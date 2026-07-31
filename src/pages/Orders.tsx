@@ -209,7 +209,7 @@ export function Orders() {
           <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
         </div>
         <div className="w-full sm:w-72">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search orders..." />
+          <SearchInput value={search} onChange={setSearch} ariaLabel="Filter orders" placeholder="Search orders..." />
         </div>
       </div>
 
@@ -429,8 +429,9 @@ export function Orders() {
               <p className="mb-2 text-xs uppercase tracking-wide text-ink-500">Discount</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div>
-                  <label className="field-label">Type</label>
+                  <label className="field-label" htmlFor="orders-type">Type</label>
                   <select
+                    id="orders-type"
                     value={discountForm.type}
                     onChange={(e) => setDiscountForm((f) => ({ ...f, type: e.target.value as DiscountType }))}
                     className="field-input w-auto"
@@ -442,8 +443,9 @@ export function Orders() {
                 </div>
                 {discountForm.type !== 'none' && (
                   <div>
-                    <label className="field-label">{discountForm.type === 'percentage' ? 'Percent (0-100)' : 'Amount (₹)'}</label>
+                    <label className="field-label" htmlFor="orders-discountform-type-percentage-percent-0-100-amount">{discountForm.type === 'percentage' ? 'Percent (0-100)' : 'Amount (₹)'}</label>
                     <input
+                      id="orders-discountform-type-percentage-percent-0-100-amount"
                       type="number"
                       min={0}
                       max={discountForm.type === 'percentage' ? 100 : undefined}
@@ -463,8 +465,9 @@ export function Orders() {
             {/* Payment + Advance */}
             <div className="flex flex-col items-start gap-4 border-t border-ink-200 pt-4 sm:flex-row sm:items-center">
               <div className="flex items-center gap-2">
-                <label className="text-sm text-ink-600">Payment:</label>
+                <label className="text-sm text-ink-600" htmlFor="order-payment-status">Payment:</label>
                 <select
+                  id="order-payment-status"
                   value={selectedOrder.paymentStatus}
                   onChange={(e) => handlePaymentChange(selectedOrder, e.target.value as PaymentStatus)}
                   className="field-input w-auto"

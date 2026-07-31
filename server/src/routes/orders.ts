@@ -34,7 +34,6 @@ ordersRouter.get('/', async (req, res) => {
 
 ordersRouter.patch('/:id', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
 
   // orders_update was admin-only, and a caller's UPDATE simply matched zero rows — so the
   // API answered 404 "Order not found", not 403 (documented in docs/TEST_PLAN.md as

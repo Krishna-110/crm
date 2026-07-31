@@ -59,13 +59,14 @@ export async function breakdownCounts(page: Page): Promise<number[]> {
 /**
  * Fills a field in the lead form by its visible label.
  *
- * getByLabel() does not work on this form: the labels are plain `<label class="field-label">`
- * with no htmlFor and the inputs have no id or aria-label, so nothing associates them. That
- * is also why a screen reader would not announce these fields — worth fixing in the app, but
- * until then the test walks the DOM: label -> following sibling input.
+ * This used to walk the DOM (label -> following-sibling input) because nothing associated
+ * the two: the labels were plain `<label class="field-label">` with no htmlFor, and the
+ * inputs had no id. getByLabel() found nothing, which is the same reason a screen reader
+ * announced nothing. The labels now carry htmlFor/id, so the standard accessible query
+ * works — and using it here means these tests would fail if that association regressed.
  */
 export function field(page: Page, label: string) {
-  return page.locator(`label:text-is("${label}")`).locator('xpath=following-sibling::input[1]');
+  return page.getByLabel(label, { exact: true });
 }
 
 /**
@@ -82,14 +83,12 @@ export function field(page: Page, label: string) {
  * the same rule ("at least one medicine is required").
  */
 export async function selectMedicine(page: Page, name: string, days = 30) {
-  await page.getByPlaceholder('Search medicines...').first().fill(name);
-  // SearchableSelect renders its options as plain <button> elements inside an absolutely
-  // positioned dropdown — there is no role="listbox"/role="option", so getByRole('option')
-  // matches nothing. (Worth adding to the component: without those roles a screen reader
-  // does not announce this as a combobox at all.) Scope to the dropdown and click the button.
-  const dropdown = page.locator('div.absolute.z-20');
-  await dropdown.first().waitFor();
-  await dropdown.getByRole('button').filter({ hasText: new RegExp(name, 'i') }).first().click();
+  // SearchableSelect now implements the ARIA combobox pattern, so this can be driven the
+  // way assistive technology sees it. Previously the options were bare <button> elements
+  // with no roles and getByRole('option') matched nothing — the test had to reach past the
+  // accessibility tree into CSS classes. Querying by role keeps that regression covered.
+  await page.getByRole('combobox').first().fill(name);
+  await page.getByRole('option', { name: new RegExp(name, 'i') }).first().click();
   await page.getByPlaceholder('Days').first().fill(String(days));
 }
 

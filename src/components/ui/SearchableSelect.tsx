@@ -1,4 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+/* oxlint-disable jsx-a11y/prefer-tag-over-role --
+ * The rule suggests <select>/<option> instead of role="listbox"/"option". That does not
+ * apply here: this is the ARIA 1.2 combobox pattern, which explicitly places those roles on
+ * non-select elements. A native <select> cannot do type-to-filter with an "add as new"
+ * affordance, which is the entire purpose of this component.
+ */
+import { useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent, FocusEvent } from 'react'
 import { Search, Plus, Check } from 'lucide-react'
 
@@ -13,6 +19,14 @@ type SearchableSelectProps = {
   createLabel?: (query: string) => string
   emptyText?: string
   required?: boolean
+  /**
+   * Accessible name for the combobox. Without it the only name available is the
+   * placeholder, which is the last-resort source in the accessible-name algorithm and a
+   * poor one: it reads as an instruction ("Search medicines...") rather than a field name,
+   * and browsers may drop it once the field has a value. With several of these rendered in
+   * a list, "combobox" with no distinguishing name is close to useless.
+   */
+  ariaLabel?: string
 }
 
 export function SearchableSelect({
@@ -24,6 +38,7 @@ export function SearchableSelect({
   createLabel,
   emptyText = 'No matches found',
   required = false,
+  ariaLabel,
 }: SearchableSelectProps) {
   const [query, setQuery] = useState(value)
   const [isOpen, setIsOpen] = useState(false)
@@ -107,12 +122,34 @@ export function SearchableSelect({
     }
   }
 
+  // ARIA combobox wiring. The keyboard model already existed (arrows, Enter, Escape and a
+  // `highlighted` index); what was missing was any way for assistive technology to know
+  // about it. Without role="combobox"/"listbox"/"option" this renders as "a text box and
+  // some buttons" — a screen reader never announces that a list opened, how many options
+  // there are, or which one is active.
+  const instanceId = useId()
+  const listboxId = `${instanceId}-listbox`
+  const optionId = (idx: number) => `${instanceId}-option-${idx}`
+  const activeDescendant = isOpen
+    ? highlighted < filtered.length
+      ? optionId(highlighted)
+      : showCreateOption
+        ? optionId(filtered.length)
+        : undefined
+    : undefined
+
   return (
     <div className="relative" ref={containerRef} onBlur={handleBlur}>
       <div className="relative">
         <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-400 pointer-events-none" />
         <input
           type="text"
+          role="combobox"
+          aria-label={ariaLabel}
+          aria-expanded={isOpen}
+          aria-controls={listboxId}
+          aria-autocomplete="list"
+          aria-activedescendant={activeDescendant}
           value={query}
           onChange={e => {
             setQuery(e.target.value)
@@ -129,13 +166,20 @@ export function SearchableSelect({
       </div>
 
       {isOpen && (
-        <div className="absolute z-20 mt-1.5 w-full max-h-64 overflow-y-auto rounded-xl border border-ink-200 bg-white py-1.5 shadow-[var(--shadow-pop)]">
+        <div
+          id={listboxId}
+          role="listbox"
+          className="absolute z-20 mt-1.5 w-full max-h-64 overflow-y-auto rounded-xl border border-ink-200 bg-white py-1.5 shadow-[var(--shadow-pop)]"
+        >
           {filtered.length === 0 && !showCreateOption && (
             <div className="px-3.5 py-3 text-center text-sm text-ink-400">{emptyText}</div>
           )}
           {filtered.map((option, idx) => (
             <button
               key={option.id}
+              id={optionId(idx)}
+              role="option"
+              aria-selected={option.label === value}
               type="button"
               onClick={() => selectOption(option)}
               onMouseEnter={() => setHighlighted(idx)}
@@ -152,6 +196,9 @@ export function SearchableSelect({
           ))}
           {showCreateOption && (
             <button
+              id={optionId(filtered.length)}
+              role="option"
+              aria-selected={false}
               type="button"
               onClick={selectCreateNew}
               onMouseEnter={() => setHighlighted(filtered.length)}

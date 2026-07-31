@@ -373,6 +373,7 @@ export function Leads() {
       <SearchInput
         value={search}
         onChange={setSearch}
+        ariaLabel="Filter leads"
         placeholder="Search by name, mobile, or disease..."
       />
 
@@ -490,8 +491,9 @@ export function Leads() {
           {/* Customer Info */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Customer Name</label>
+              <label className="field-label" htmlFor="leads-customer-name">Customer Name</label>
               <input
+                id="leads-customer-name"
                 type="text"
                 required
                 value={form.customerName}
@@ -500,8 +502,9 @@ export function Leads() {
               />
             </div>
             <div>
-              <label className="field-label">Mobile Number</label>
+              <label className="field-label" htmlFor="leads-mobile-number">Mobile Number</label>
               <input
+                id="leads-mobile-number"
                 type="tel"
                 required
                 value={form.mobile}
@@ -513,8 +516,9 @@ export function Leads() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Alternate Number</label>
+              <label className="field-label" htmlFor="leads-alternate-number">Alternate Number</label>
               <input
+                id="leads-alternate-number"
                 type="tel"
                 value={form.alternateNumber}
                 onChange={e => setForm(f => ({ ...f, alternateNumber: e.target.value }))}
@@ -522,8 +526,9 @@ export function Leads() {
               />
             </div>
             <div>
-              <label className="field-label">Address</label>
+              <label className="field-label" htmlFor="leads-address">Address</label>
               <input
+                id="leads-address"
                 type="text"
                 required
                 value={form.address}
@@ -535,8 +540,9 @@ export function Leads() {
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <label className="field-label">City</label>
+              <label className="field-label" htmlFor="leads-city">City</label>
               <input
+                id="leads-city"
                 type="text"
                 required
                 value={form.city}
@@ -545,8 +551,9 @@ export function Leads() {
               />
             </div>
             <div>
-              <label className="field-label">State</label>
+              <label className="field-label" htmlFor="leads-state">State</label>
               <input
+                id="leads-state"
                 type="text"
                 required
                 value={form.state}
@@ -555,8 +562,9 @@ export function Leads() {
               />
             </div>
             <div>
-              <label className="field-label">Pincode</label>
+              <label className="field-label" htmlFor="leads-pincode">Pincode</label>
               <input
+                id="leads-pincode"
                 type="text"
                 required
                 value={form.pincode}
@@ -568,8 +576,9 @@ export function Leads() {
 
           {/* Disease */}
           <div>
-            <label className="field-label">Disease</label>
+            <label className="field-label" htmlFor="leads-disease">Disease</label>
             <input
+              id="leads-disease"
               type="text"
               required={!editingLead}
               value={form.disease}
@@ -581,8 +590,8 @@ export function Leads() {
 
           {/* Medicines Required */}
           <div>
-            <label className="field-label">Medicines Required</label>
-            <div className="space-y-3">
+            <span className="field-label" id="leads-medicines-label">Medicines Required</span>
+            <div className="space-y-3" role="group" aria-labelledby="leads-medicines-label">
               {form.medicines.map((row, idx) => (
                 <div key={row.id} className="flex items-start gap-2">
                   <div className="flex-1">
@@ -591,6 +600,7 @@ export function Leads() {
                       onChange={name => updateMedicineRow(row.id, { name })}
                       options={medicineOptions}
                       placeholder="Search medicines..."
+                      ariaLabel={`Medicine ${idx + 1}`}
                       onCreateNew={name => createMedicineForRow(row.id, name)}
                       emptyText="No medicines found"
                       required={idx === 0 && !editingLead}
@@ -604,6 +614,7 @@ export function Leads() {
                       value={row.days}
                       onChange={e => updateMedicineRow(row.id, { days: e.target.value })}
                       placeholder="Days"
+                      aria-label={`Days supply for medicine ${idx + 1}`}
                       className="field-input"
                     />
                   </div>
@@ -629,8 +640,9 @@ export function Leads() {
           </div>
 
           <div>
-            <label className="field-label">Doctor Name (optional)</label>
+            <label className="field-label" htmlFor="leads-doctor-name-optional">Doctor Name (optional)</label>
             <input
+              id="leads-doctor-name-optional"
               type="text"
               value={form.doctorName}
               onChange={e => setForm(f => ({ ...f, doctorName: e.target.value }))}
@@ -639,8 +651,9 @@ export function Leads() {
           </div>
 
           <div>
-            <label className="field-label">Notes (optional)</label>
+            <label className="field-label" htmlFor="leads-notes-optional">Notes (optional)</label>
             <textarea
+              id="leads-notes-optional"
               rows={2}
               value={form.notes}
               onChange={e => setForm(f => ({ ...f, notes: e.target.value }))}
@@ -652,8 +665,9 @@ export function Leads() {
           {/* Lead Meta */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Lead Source</label>
+              <label className="field-label" htmlFor="leads-lead-source">Lead Source</label>
               <select
+                id="leads-lead-source"
                 value={form.leadSource}
                 onChange={e => setForm(f => ({ ...f, leadSource: e.target.value as LeadSource }))}
                 className="field-input"
@@ -666,8 +680,9 @@ export function Leads() {
               </select>
             </div>
             <div>
-              <label className="field-label">Assigned Caller</label>
+              <label className="field-label" htmlFor="leads-assigned-caller">Assigned Caller</label>
               <select
+                id="leads-assigned-caller"
                 value={form.assignedCaller}
                 onChange={e => setForm(f => ({ ...f, assignedCaller: e.target.value }))}
                 className="field-input"
@@ -686,8 +701,9 @@ export function Leads() {
             <>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="field-label">Lead Status</label>
+                  <label className="field-label" htmlFor="leads-lead-status">Lead Status</label>
                   <select
+                    id="leads-lead-status"
                     value={form.status}
                     onChange={e => setForm(f => ({ ...f, status: e.target.value as LeadStatus }))}
                     className="field-input"
@@ -702,8 +718,9 @@ export function Leads() {
                   </select>
                 </div>
                 <div>
-                  <label className="field-label">Next Follow-up</label>
+                  <label className="field-label" htmlFor="leads-next-follow-up">Next Follow-up</label>
                   <input
+                    id="leads-next-follow-up"
                     type="date"
                     value={form.nextFollowUp}
                     onChange={e => setForm(f => ({ ...f, nextFollowUp: e.target.value }))}

@@ -100,7 +100,7 @@ export function Users() {
         actions={<Button icon={<Plus size={16} />} onClick={openCreate}>Add User</Button>}
       />
 
-      <SearchInput value={search} onChange={setSearch} placeholder="Search by name, email, or employee ID..." className="max-w-md" />
+      <SearchInput value={search} onChange={setSearch} ariaLabel="Filter users" placeholder="Search by name, email, or employee ID..." className="max-w-md" />
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -151,8 +151,8 @@ export function Users() {
                   <td className="px-3 py-3 text-xs text-ink-500">{user.lastLogin}</td>
                   <td className="px-3 py-3">
                     <div className="flex items-center gap-1">
-                      <button onClick={() => openEdit(user)} className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-700"><Edit2 size={15} /></button>
-                      <button onClick={() => deleteUser(user.id)} className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-danger-50 hover:text-danger-600"><Trash2 size={15} /></button>
+                      <button onClick={() => openEdit(user)} aria-label={`Edit ${user.name}`} className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-ink-100 hover:text-ink-700"><Edit2 size={15} /></button>
+                      <button onClick={() => deleteUser(user.id)} aria-label={`Delete ${user.name}`} className="rounded-lg p-1.5 text-ink-400 transition-colors hover:bg-danger-50 hover:text-danger-600"><Trash2 size={15} /></button>
                     </div>
                   </td>
                 </tr>
@@ -174,33 +174,39 @@ export function Users() {
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="field-label">Full Name</label>
-            <input type="text" required value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="field-input" placeholder="e.g. Anjali Verma" />
+            <label className="field-label" htmlFor="users-full-name">Full Name</label>
+            <input
+               id="users-full-name" type="text" required value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} className="field-input" placeholder="e.g. Anjali Verma" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Employee ID</label>
-              <input type="text" required value={form.employeeId} onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))} className="field-input" placeholder="EMP009" />
+              <label className="field-label" htmlFor="users-employee-id">Employee ID</label>
+              <input
+                 id="users-employee-id" type="text" required value={form.employeeId} onChange={(e) => setForm((f) => ({ ...f, employeeId: e.target.value }))} className="field-input" placeholder="EMP009" />
             </div>
             <div>
-              <label className="field-label">Phone</label>
-              <input type="tel" required value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} className="field-input" placeholder="+91 98xxx xxxxx" />
+              <label className="field-label" htmlFor="users-phone">Phone</label>
+              <input
+                 id="users-phone" type="tel" required value={form.phone} onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))} className="field-input" placeholder="+91 98xxx xxxxx" />
             </div>
           </div>
           <div>
-            <label className="field-label">Email</label>
-            <input type="email" required value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} className="field-input" placeholder="name@medcrm.in" />
+            <label className="field-label" htmlFor="users-email">Email</label>
+            <input
+               id="users-email" type="email" required value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} className="field-input" placeholder="name@medcrm.in" />
           </div>
           <div>
-            <label className="field-label">Role</label>
-            <select value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))} className="field-input">
+            <label className="field-label" htmlFor="users-role">Role</label>
+            <select
+               id="users-role" value={form.role} onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as UserRole }))} className="field-input">
               <option value="caller">Caller</option>
               <option value="admin">Admin</option>
             </select>
           </div>
           <div>
-            <label className="field-label">{editingUser ? 'Reset Password (optional)' : 'Password'}</label>
+            <label className="field-label" htmlFor="users-editinguser-reset-password-optional-password">{editingUser ? 'Reset Password (optional)' : 'Password'}</label>
             <input
+              id="users-editinguser-reset-password-optional-password"
               type="password"
               required={!editingUser}
               minLength={6}

@@ -158,7 +158,7 @@ export function Renewals() {
           <Tabs tabs={tabs} activeTab={activeTab} onChange={setActiveTab} />
         </div>
         <div className="w-full sm:w-72">
-          <SearchInput value={search} onChange={setSearch} placeholder="Search renewals..." />
+          <SearchInput value={search} onChange={setSearch} ariaLabel="Filter renewals" placeholder="Search renewals..." />
         </div>
       </div>
 

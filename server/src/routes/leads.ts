@@ -98,7 +98,6 @@ leadsRouter.get('/', async (req, res) => {
 
 leadsRouter.post('/', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
   const body = req.body ?? {};
 
   for (const field of ['customerName', 'mobile', 'address', 'city', 'state', 'pincode', 'disease']) {
@@ -153,7 +152,6 @@ leadsRouter.post('/', async (req, res) => {
 
 leadsRouter.patch('/:id', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
   const body = req.body ?? {};
 
   const lead = await withDbSession(actor, async (tx) => {
@@ -238,7 +236,6 @@ leadsRouter.patch('/:id', async (req, res) => {
 
 leadsRouter.delete('/:id', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
 
   // Soft delete, so this is an UPDATE and falls under leads_update (admin OR own lead)
   // rather than the admin-only leads_delete policy. prevent_caller_lead_lifecycle_changes
@@ -260,7 +257,6 @@ leadsRouter.delete('/:id', async (req, res) => {
 
 leadsRouter.post('/:id/activities', async (req, res) => {
   const actor = req.actor!;
-  const db = dbFor(actor);
   const body = req.body ?? {};
 
   const description = body.description;

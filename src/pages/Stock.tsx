@@ -180,7 +180,7 @@ export function Stock() {
         actions={<Button icon={<Plus size={16} />} onClick={openCreate}>Add Medicine</Button>}
       />
 
-      <SearchInput value={search} onChange={setSearch} placeholder="Search by medicine or generic name..." className="max-w-md" />
+      <SearchInput value={search} onChange={setSearch} ariaLabel="Filter medicines" placeholder="Search by medicine or generic name..." className="max-w-md" />
 
       <Card className="overflow-hidden">
         <div className="overflow-x-auto">
@@ -250,17 +250,20 @@ export function Stock() {
       >
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="field-label">Medicine Name</label>
-            <input type="text" required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="field-input" placeholder="e.g. Metformin 500mg" />
+            <label className="field-label" htmlFor="stock-medicine-name">Medicine Name</label>
+            <input
+               id="stock-medicine-name" type="text" required value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} className="field-input" placeholder="e.g. Metformin 500mg" />
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Generic Name</label>
-              <input type="text" value={form.genericName} onChange={e => setForm(f => ({ ...f, genericName: e.target.value }))} className="field-input" placeholder="e.g. Metformin" />
+              <label className="field-label" htmlFor="stock-generic-name">Generic Name</label>
+              <input
+                 id="stock-generic-name" type="text" value={form.genericName} onChange={e => setForm(f => ({ ...f, genericName: e.target.value }))} className="field-input" placeholder="e.g. Metformin" />
             </div>
             <div>
-              <label className="field-label">Dosage Form</label>
-              <select value={form.dosageForm} onChange={e => setForm(f => ({ ...f, dosageForm: e.target.value as DosageForm }))} className="field-input">
+              <label className="field-label" htmlFor="stock-dosage-form">Dosage Form</label>
+              <select
+                 id="stock-dosage-form" value={form.dosageForm} onChange={e => setForm(f => ({ ...f, dosageForm: e.target.value as DosageForm }))} className="field-input">
                 {dosageFormOptions.map(o => (
                   <option key={o.value} value={o.value}>{o.label}</option>
                 ))}
@@ -269,13 +272,15 @@ export function Stock() {
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="field-label">Unit Price (₹)</label>
-              <input type="number" min={0} step="0.01" required value={form.unitPrice} onChange={e => setForm(f => ({ ...f, unitPrice: e.target.value }))} className="field-input" placeholder="0.00" />
+              <label className="field-label" htmlFor="stock-unit-price">Unit Price (₹)</label>
+              <input
+                 id="stock-unit-price" type="number" min={0} step="0.01" required value={form.unitPrice} onChange={e => setForm(f => ({ ...f, unitPrice: e.target.value }))} className="field-input" placeholder="0.00" />
             </div>
             {!editingMedicine && (
               <div>
-                <label className="field-label">Opening Stock</label>
-                <input type="number" min={0} step="1" value={form.openingStock} onChange={e => setForm(f => ({ ...f, openingStock: e.target.value }))} className="field-input" placeholder="0" />
+                <label className="field-label" htmlFor="stock-opening-stock">Opening Stock</label>
+                <input
+                   id="stock-opening-stock" type="number" min={0} step="1" value={form.openingStock} onChange={e => setForm(f => ({ ...f, openingStock: e.target.value }))} className="field-input" placeholder="0" />
               </div>
             )}
           </div>
@@ -315,8 +320,9 @@ export function Stock() {
             </button>
           </div>
           <div>
-            <label className="field-label">{stockForm.mode === 'add' ? 'Units to add' : 'New stock quantity'}</label>
+            <label className="field-label" htmlFor="stock-stockform-mode-add-units-to-add-new-stock-quantity">{stockForm.mode === 'add' ? 'Units to add' : 'New stock quantity'}</label>
             <input
+              id="stock-stockform-mode-add-units-to-add-new-stock-quantity"
               type="number"
               min={stockForm.mode === 'add' ? 1 : 0}
               step="1"

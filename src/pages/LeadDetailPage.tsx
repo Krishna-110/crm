@@ -191,6 +191,7 @@ export function LeadDetailPage() {
         <div className="flex items-start gap-4">
           <button
             onClick={() => navigate('/leads')}
+            aria-label="Back to leads"
             className="mt-1 rounded-lg border border-ink-200/80 bg-white p-2 text-ink-500 shadow-sm hover:bg-ink-50 hover:text-ink-700 transition-colors"
           >
             <ArrowLeft size={20} />
@@ -358,6 +359,7 @@ export function LeadDetailPage() {
                 rows={3}
                 value={comment}
                 onChange={e => setComment(e.target.value)}
+                aria-label="Add a comment"
                 placeholder="Write a comment about this lead..."
                 className="field-input resize-none"
               />
@@ -374,8 +376,9 @@ export function LeadDetailPage() {
               {showMedicineFields && (
                 <div className="mt-3 flex items-start gap-2 rounded-xl border border-ink-100 bg-ink-50/50 p-3">
                   <div className="flex-1">
-                    <label className="field-label">Medicine Name</label>
+                    <label className="field-label" htmlFor="leaddetailpage-medicine-name">Medicine Name</label>
                     <input
+                      id="leaddetailpage-medicine-name"
                       type="text"
                       value={medicineName}
                       onChange={e => setMedicineName(e.target.value)}
@@ -384,8 +387,9 @@ export function LeadDetailPage() {
                     />
                   </div>
                   <div className="w-28">
-                    <label className="field-label">Days</label>
+                    <label className="field-label" htmlFor="leaddetailpage-days">Days</label>
                     <input
+                      id="leaddetailpage-days"
                       type="number"
                       min={1}
                       value={medicineDays}

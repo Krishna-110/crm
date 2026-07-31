@@ -64,7 +64,6 @@ usersRouter.patch('/:id', async (req, res) => {
   // inside withDbSession — which is why the write below does. Outside a session the GUC is
   // NULL, the branch never matches, and a caller can make themselves an admin.
   assertCanEditUser(actor, req.params.id);
-  const db = dbFor(actor);
 
   const body = req.body ?? {};
   const data: Prisma.usersUpdateInput = {};
