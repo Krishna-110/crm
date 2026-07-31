@@ -208,6 +208,10 @@ export async function applyBeforeWriteRulesAsync(
     }
     if (model === 'follow_ups') await inheritFollowUpCaller(row);
   }
+
+  // Validation runs last, after inheritance has filled in any derived foreign keys — a
+  // follow-up that inherits its caller from a lead must have THAT caller validated.
+  await applyValidationRules(model, args);
 }
 
 /**
@@ -349,4 +353,114 @@ export async function applyAggregateRules(
   const client = await tx();
   if (!client) return;
   for (const id of ids) await agg.rebuild(client, id);
+}
+
+// ---------------------------------------------------------------------------------------
+// PHASE 4 — referential validation
+//
+// Seven triggers, all built on two helpers:
+//
+//   assert_active_user(id, context)    — the referenced user must exist, not be soft-deleted,
+//                                        and have status 'active'
+//   assert_active_product(id, context) — the referenced product must exist, not be
+//                                        soft-deleted, and have is_active
+//
+// plus two consistency guards: a follow-up's or order's customer_id must agree with the
+// customer_id of the lead/renewal it is linked to.
+//
+// All of them RAISE EXCEPTION, which surfaces as P0001 and is mapped to HTTP 403 by
+// errors.ts. The ported versions throw ApiError.forbidden with the same message text, so the
+// status and body a client sees are unchanged — only the layer that produces them moves.
+// ---------------------------------------------------------------------------------------
+
+/** Column -> context label, matching the strings the triggers passed. */
+const ACTIVE_USER_REFS: Record<string, string[]> = {
+  leads: ['assigned_caller_id'],
+  renewals: ['assigned_caller_id'],
+  follow_ups: ['assigned_caller_id'],
+};
+
+const ACTIVE_PRODUCT_REFS: Record<string, string[]> = {
+  leads: ['requested_product_id'],
+  order_items: ['product_id'],
+};
+
+/** Replaces `assert_active_user`. */
+async function assertActiveUser(id: unknown, context: string): Promise<void> {
+  if (typeof id !== 'string') return; // NULL is allowed, as in the original
+  const client = await tx();
+  if (!client) return;
+  const rows = (await client.$queryRawUnsafe(
+    `SELECT status::text AS status, deleted_at FROM users WHERE id = $1`,
+    id,
+  )) as { status: string; deleted_at: Date | null }[];
+  const row = rows[0];
+  if (!row || row.deleted_at !== null || row.status !== 'active') {
+    const { ApiError } = await import('./errors.js');
+    throw ApiError.forbidden(`${context} may not reference an inactive or deleted user (${id})`);
+  }
+}
+
+/** Replaces `assert_active_product`. */
+async function assertActiveProduct(id: unknown, context: string): Promise<void> {
+  if (typeof id !== 'string') return;
+  const client = await tx();
+  if (!client) return;
+  const rows = (await client.$queryRawUnsafe(
+    `SELECT is_active, deleted_at FROM products WHERE id = $1`,
+    id,
+  )) as { is_active: boolean; deleted_at: Date | null }[];
+  const row = rows[0];
+  if (!row || row.deleted_at !== null || !row.is_active) {
+    const { ApiError } = await import('./errors.js');
+    throw ApiError.forbidden(`${context} may not reference an inactive or deleted product (${id})`);
+  }
+}
+
+/**
+ * Replaces `check_followup_customer_consistency` and `check_order_customer_consistency`.
+ *
+ * Only enforced when the parent actually has a customer_id — the triggers skipped the check
+ * for an unconverted lead, and tightening that here would reject writes the database accepts.
+ */
+const CONSISTENCY: Record<string, { fk: string; parent: string; label: string }[]> = {
+  follow_ups: [
+    { fk: 'lead_id', parent: 'leads', label: "lead" },
+    { fk: 'renewal_id', parent: 'renewals', label: "renewal" },
+  ],
+  orders: [{ fk: 'lead_id', parent: 'leads', label: "lead" }],
+};
+
+async function assertCustomerConsistency(model: string, row: Row): Promise<void> {
+  for (const rule of CONSISTENCY[model] ?? []) {
+    const parentId = row[rule.fk];
+    if (typeof parentId !== 'string') continue;
+    const client = await tx();
+    if (!client) return;
+    const rows = (await client.$queryRawUnsafe(
+      `SELECT customer_id FROM ${rule.parent} WHERE id = $1`,
+      parentId,
+    )) as { customer_id: string | null }[];
+    const parentCustomer = rows[0]?.customer_id ?? null;
+    if (parentCustomer !== null && parentCustomer !== (row.customer_id ?? null)) {
+      const { ApiError } = await import('./errors.js');
+      throw ApiError.forbidden(
+        `${model}.customer_id (${row.customer_id ?? '<NULL>'}) does not match the linked ` +
+          `${rule.label}'s customer_id (${parentCustomer})`,
+      );
+    }
+  }
+}
+
+/** All referential validation for one write. */
+export async function applyValidationRules(model: string, args: unknown): Promise<void> {
+  for (const row of payloadRows(args)) {
+    for (const col of ACTIVE_USER_REFS[model] ?? []) {
+      if (col in row) await assertActiveUser(row[col], `${model}.${col}`);
+    }
+    for (const col of ACTIVE_PRODUCT_REFS[model] ?? []) {
+      if (col in row) await assertActiveProduct(row[col], `${model}.${col}`);
+    }
+    await assertCustomerConsistency(model, row);
+  }
 }
