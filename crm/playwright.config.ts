@@ -58,9 +58,19 @@ const TEST_DATABASE_URL = (() => {
 
 export default defineConfig({
   testDir: './e2e',
-  // Rebuilds crm_test before anything runs, so the fixture is identical every time
-  // regardless of what a previous run (or the vitest suite) left behind.
-  globalSetup: './e2e/globalSetup.ts',
+  /*
+   * crm_test is rebuilt by the `pretest:e2e` npm script, NOT by a globalSetup hook.
+   *
+   * Playwright starts webServer before globalSetup runs, so a hook cannot create the database
+   * the API needs to boot: the API comes up, /api/health queries a database that does not
+   * exist, and the run dies on a readiness timeout that names none of this. It only worked
+   * here because crm_test already existed from previous runs — on any fresh machine, and on
+   * CI every time, it does not.
+   *
+   * npm runs pretest:e2e before test:e2e, which puts the rebuild firmly ahead of everything
+   * Playwright starts. Running `npx playwright test` directly skips it; the health check then
+   * fails loudly rather than silently using the wrong data.
+   */
   // The suites share one database and one server pair, so they must not overlap.
   fullyParallel: false,
   workers: 1,

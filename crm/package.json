@@ -18,6 +18,7 @@
     "db:seed": "npm -w server run db:seed",
     "test": "npm run typecheck && npm run build && npm -w server test",
     "test:server": "npm -w server test",
+    "pretest:e2e": "npm -w server run test:db",
     "test:e2e": "playwright test"
   },
   "devDependencies": {

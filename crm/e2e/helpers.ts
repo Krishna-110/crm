@@ -6,11 +6,16 @@ export const CALLER = { email: 'sneha.iyer@medicrm.in', password: 'caller123', n
 export const INACTIVE = { email: 'kavya.reddy@medicrm.in', password: 'caller123' };
 
 /**
- * Counts in the `crm_test` fixture, rebuilt by e2e/globalSetup.ts before every run.
+ * Counts in the `crm_test` fixture, rebuilt by the `pretest:e2e` script before every run.
  *
- * Read straight from the database rather than guessed. Where admin and caller are equal the
- * assertion is weak by nature — orders and stock below — so scoping.spec.ts asserts the
- * caller does NOT see the admin's total as well, which keeps it meaningful.
+ * Read straight from the database rather than guessed. Every count except stock differs
+ * between the two roles, which is what makes the narrowing assertions falsifiable. Stock is
+ * equal on purpose — products are a shared catalogue, and scoping.spec.ts asserts it stays
+ * that way rather than treating equality as a defect.
+ *
+ * Where the two could be equal, the spec also asserts the caller does NOT see the admin's
+ * total. That guard is what caught orders seeded 1/1, where "orders is narrowed for a caller"
+ * passed while proving nothing.
  */
 export const FIXTURE = {
   admin: { leads: 9, users: 7, orders: 2, renewals: 2, stock: 25 },
