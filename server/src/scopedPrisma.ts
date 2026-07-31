@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { prisma } from './prisma.js';
 import { ApiError } from './errors.js';
+import { applyBeforeWriteRules } from './dbRules.js';
 import type { Actor } from './scope.js';
 import {
   customerScope,
@@ -157,6 +158,10 @@ export function scopedPrisma(actor: Actor) {
                 'applied — several triggers silently no-op without it.',
             );
           }
+
+          // Rules ported out of PostgreSQL triggers (see src/dbRules.ts). Applied to every
+          // write regardless of scoping, exactly as a BEFORE trigger fired for every row.
+          if (WRITE_OPS.has(op)) applyBeforeWriteRules(model, op, args);
 
           if (GLOBAL_MODELS.has(model)) return query(args);
 
