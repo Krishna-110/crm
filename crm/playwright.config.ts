@@ -27,7 +27,7 @@ const BASE_URL = `http://localhost:${WEB_PORT}`;
  */
 const TEST_DATABASE_URL =
   process.env.E2E_DATABASE_URL ??
-  'postgresql://app_prisma:prismatest123@localhost:5432/medcrm_test?schema=public';
+  'postgresql://postgres:root@localhost:5432/crm_test?schema=public';
 
 export default defineConfig({
   testDir: './e2e',
