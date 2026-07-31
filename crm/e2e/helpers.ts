@@ -6,13 +6,15 @@ export const CALLER = { email: 'sneha.iyer@medicrm.in', password: 'caller123', n
 export const INACTIVE = { email: 'kavya.reddy@medicrm.in', password: 'caller123' };
 
 /**
- * Counts in the `medcrm_test` fixture (pure seed, rebuilt by e2e/globalSetup.ts).
- * Read straight from the database rather than guessed, so a fixture change fails loudly
- * here instead of producing a confusing UI assertion failure.
+ * Counts in the `crm_test` fixture, rebuilt by e2e/globalSetup.ts before every run.
+ *
+ * Read straight from the database rather than guessed. Where admin and caller are equal the
+ * assertion is weak by nature — orders and stock below — so scoping.spec.ts asserts the
+ * caller does NOT see the admin's total as well, which keeps it meaningful.
  */
 export const FIXTURE = {
-  admin: { leads: 15, users: 8, orders: 6, renewals: 6, stock: 6 },
-  caller: { leads: 4, users: 1, orders: 1, renewals: 2, stock: 6 },
+  admin: { leads: 9, users: 7, orders: 2, renewals: 2, stock: 25 },
+  caller: { leads: 3, users: 1, orders: 1, renewals: 1, stock: 25 },
 } as const;
 
 /**

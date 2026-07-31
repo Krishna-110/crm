@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { defineConfig, devices } from '@playwright/test';
 
 /**
@@ -9,7 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * So this starts its OWN pair of servers rather than reusing whatever is running:
  *
- *   API   :3002  ->  medcrm_test   (DATABASE_URL overridden below)
+ *   API   :3002  ->  crm_test   (DATABASE_URL overridden below)
  *   Vite  :5174  ->  proxies /api to :3002 (API_PROXY_TARGET)
  *
  * Both differ from the development ports (3001 / 5173), so a dev session can stay running
@@ -31,7 +32,7 @@ const TEST_DATABASE_URL =
 
 export default defineConfig({
   testDir: './e2e',
-  // Rebuilds medcrm_test before anything runs, so the fixture is identical every time
+  // Rebuilds crm_test before anything runs, so the fixture is identical every time
   // regardless of what a previous run (or the vitest suite) left behind.
   globalSetup: './e2e/globalSetup.ts',
   // The suites share one database and one server pair, so they must not overlap.
@@ -73,6 +74,10 @@ export default defineConfig({
     },
     {
       command: `npx vite --port ${WEB_PORT} --strictPort`,
+      // Must run from client/: that is where vite.config.ts and index.html live. Started
+      // from the workspace root Vite finds no config, serves the wrong directory, and the
+      // readiness check below times out with both servers apparently "up".
+      cwd: 'client',
       url: BASE_URL,
       reuseExistingServer: false,
       stdout: 'pipe',

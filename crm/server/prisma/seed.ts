@@ -248,14 +248,38 @@ async function main() {
         assignedCallerId: sneha, createdBy: admin,
       },
     });
-    // A second renewal owned by a DIFFERENT caller. Without it every renewal belongs to one
-    // person, and any test asserting that scoping narrows this model passes vacuously.
-    const customer2 = await prisma.customer.create({
+    // A second converted lead, owned by a DIFFERENT caller. Without it every order belongs to
+    // one person and any assertion that scoping narrows orders passes vacuously — the caller
+    // and admin totals are identical, so the test proves nothing.
+    const anilLeadId = created['Anil Kumar']!;
+    const anilCustomer = await prisma.customer.create({
       data: { fullName: 'Anil Kumar', primaryMobile: '9812345670', city: 'Delhi', state: 'Delhi', pincode: '110001' },
     });
+    await prisma.lead.update({
+      where: { id: anilLeadId },
+      data: { customerId: anilCustomer.id, status: 'converted' },
+    });
+    const anilLine = Number(atorva.unitPrice) * 1;
+    await prisma.order.create({
+      data: {
+        orderNumber: 'ORD-0002', customerId: anilCustomer.id, leadId: anilLeadId,
+        customerName: anilCustomer.fullName, shippingAddress: 'Delhi main road',
+        totalAmount: anilLine, payableAmount: anilLine,
+        paymentStatus: 'pending', stage: 'confirmed', createdBy: admin, createdAt: at(-5),
+        items: {
+          create: [{
+            productId: atorva.id, medicineNameSnapshot: atorva.brandName!,
+            quantity: 1, unitPriceSnapshot: atorva.unitPrice, lineTotal: anilLine,
+          }],
+        },
+      },
+    });
+
+    // A second renewal owned by a DIFFERENT caller. Without it every renewal belongs to one
+    // person, and any test asserting that scoping narrows this model passes vacuously.
     await prisma.renewal.create({
       data: {
-        customerId: customer2.id, customerName: customer2.fullName,
+        customerId: anilCustomer.id, customerName: anilCustomer.fullName,
         productId: atorva.id, medicineName: atorva.brandName!,
         orderDate: at(-30), renewalDate: at(-4), expiryDate: at(-1),   // overdue, for status coverage
         assignedCallerId: ananya, createdBy: admin,
