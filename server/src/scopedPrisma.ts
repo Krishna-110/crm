@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { prisma } from './prisma.js';
 import { ApiError } from './errors.js';
-import { applyBeforeWriteRules } from './dbRules.js';
+import { applyBeforeWriteRules, applyBeforeWriteRulesAsync, applyAfterWriteRules } from './dbRules.js';
 import type { Actor } from './scope.js';
 import {
   customerScope,
@@ -94,7 +94,29 @@ const GLOBAL_MODELS = new Set([
  * Tracks whether the current async context is inside withDbSession(), i.e. whether
  * set_app_session() has been applied to the surrounding transaction.
  */
-const sessionStore = new AsyncLocalStorage<{ userId: string }>();
+/**
+ * The session store also carries the active transaction client.
+ *
+ * Ported trigger rules need to READ inside the same transaction as the write that triggered
+ * them — resolving a customer's name for a snapshot column, for instance. Reading through
+ * the module-level `prisma` client instead would miss rows created earlier in the same
+ * transaction, which is exactly what lead conversion does (create a customer, then a
+ * renewal referencing it).
+ *
+ * The stored client is the EXTENDED one, so rule lookups use `$queryRaw` rather than model
+ * methods: model calls would re-enter this extension and get the caller's scope applied,
+ * and an internal lookup must see the row regardless of who is asking.
+ */
+type TxClient = {
+  $queryRawUnsafe: (sql: string, ...values: unknown[]) => Promise<unknown>;
+  $executeRawUnsafe: (sql: string, ...values: unknown[]) => Promise<number>;
+};
+const sessionStore = new AsyncLocalStorage<{ userId: string; tx?: TxClient }>();
+
+/** The active transaction client, for ported rules that must read or write alongside. */
+export function currentTx(): TxClient | undefined {
+  return sessionStore.getStore()?.tx;
+}
 
 /**
  * Write operations. These MUST run with a session GUC established, because several
@@ -161,9 +183,20 @@ export function scopedPrisma(actor: Actor) {
 
           // Rules ported out of PostgreSQL triggers (see src/dbRules.ts). Applied to every
           // write regardless of scoping, exactly as a BEFORE trigger fired for every row.
-          if (WRITE_OPS.has(op)) applyBeforeWriteRules(model, op, args);
+          // Every exit below goes through `run`, so an AFTER-write rule cannot be skipped by
+          // adding another early return — the mistake a chain of `return query(args)` invites.
+          const run = async (a: unknown) => {
+            const result = await query(a as never);
+            if (WRITE_OPS.has(op)) await applyAfterWriteRules(model, op, a, result);
+            return result;
+          };
 
-          if (GLOBAL_MODELS.has(model)) return query(args);
+          if (WRITE_OPS.has(op)) {
+            applyBeforeWriteRules(model, op, args);
+            await applyBeforeWriteRulesAsync(model, op, args);
+          }
+
+          if (GLOBAL_MODELS.has(model)) return run(args);
 
           const scopeFor = SCOPED_MODELS[model];
           if (!scopeFor) {
@@ -180,11 +213,11 @@ export function scopedPrisma(actor: Actor) {
             throw new Error(`scopedPrisma: upsert is not supported on scoped model "${model}"`);
           }
 
-          if (!WHERE_OPS.has(op)) return query(args);
+          if (!WHERE_OPS.has(op)) return run(args);
 
           const scope = scopeFor(actor);
           // An admin scope is `{}` — nothing to inject, so leave args untouched.
-          if (Object.keys(scope).length === 0) return query(args);
+          if (Object.keys(scope).length === 0) return run(args);
 
           // Append the scope to `where.AND` while leaving the caller's own top-level keys
           // in place. Wrapping the whole thing as `{ AND: [where, scope] }` would be
@@ -195,7 +228,7 @@ export function scopedPrisma(actor: Actor) {
           const prev = typed.where ?? {};
           const prevAnd = Array.isArray(prev.AND) ? prev.AND : prev.AND ? [prev.AND] : [];
           typed.where = { ...prev, AND: [...prevAnd, scope] };
-          return query(args);
+          return run(args);
         },
       },
     },
@@ -239,8 +272,11 @@ export async function withDbSession<T>(
   //
   // set_app_session sets its GUCs with is_local=true, so they last exactly as long as this
   // transaction — which is why the store is scoped here and not to the whole request.
-  return sessionStore.run({ userId: actor.userId }, () =>
+  const store: { userId: string; tx?: TxClient } = { userId: actor.userId };
+  return sessionStore.run(store, () =>
     scopedPrisma(actor).$transaction(async (tx) => {
+      // Published before any rule runs, so ported triggers can read within this transaction.
+      store.tx = tx as unknown as TxClient;
       await tx.$executeRaw`SELECT set_app_session(${actor.userId}::uuid)`;
       return fn(tx as never);
     }),
