@@ -32,19 +32,39 @@
 -- Applies to NEW sessions; existing connections keep their current setting until they
 -- reconnect. Uses current_database() so the same migration works for medcrm and medcrm_test.
 --
--- CAVEAT when applying to an EXISTING database that was built under a different timezone.
--- ensure_monthly_partition() derives its month boundaries from date_trunc('month', ...) on a
--- timestamptz, so the month a given instant falls into depends on the session timezone.
--- Changing the timezone of a database whose partitions were created under the old one can
--- therefore produce an overlap the next time a partition is created:
+-- ####################################################################################
+-- IMPORTANT — set the timezone BEFORE schema.sql on a fresh install; do not rely on this
+-- migration alone. See db/README.md step 0.
+-- ####################################################################################
+--
+-- Partition bounds are stored as ABSOLUTE INSTANTS. The literal in
+-- `FOR VALUES FROM ('2026-05-01')` is resolved using the session timezone at CREATE time,
+-- so a partition created under IST and named lead_activities_2026_05 actually spans
+-- 2026-04-30 18:30Z .. 2026-05-31 18:30Z. Verified directly:
+--
+--   IST session: FOR VALUES FROM ('2026-05-01 00:00:00+05:30') TO ('2026-06-01 00:00:00+05:30')
+--   UTC session: FOR VALUES FROM ('2026-04-30 18:30:00+00')    TO ('2026-05-31 18:30:00+00')
+--
+-- The consequence: a database whose partitions were created under timezone A cannot have
+-- new ones added under timezone B, because the month-aligned bounds no longer line up:
 --
 --   ERROR: partition "lead_activities_2026_04" would overlap partition "lead_activities_2026_05"
 --
--- This was reproduced deliberately by flipping this migration to UTC mid-build. A fresh
--- install is unaffected, because every partition is then created under one consistent
--- timezone. If you hit it on an existing database, the fix is to drop and recreate the
--- affected empty future partitions under the new timezone — check pg_class/pg_inherits for
--- the actual bounds before doing so.
+-- So on a database built under UTC (the default on most CI runners and cloud hosts),
+-- applying THIS migration would make ensure_monthly_partition() start failing the next time
+-- the scheduler creates a month — turning a silent inconsistency into a daily error.
+--
+-- What matters is CONSISTENCY, not which zone: a build that is UTC throughout works fine
+-- (verified). This migration is therefore safe on a database that was ALREADY effectively
+-- Asia/Kolkata — which is what it is for: pinning the value so it cannot drift later.
+--
+-- If you must change the timezone of an existing database, drop and recreate the empty
+-- future partitions under the new zone. Check the real bounds first:
+--
+--   SELECT c.relname, pg_get_expr(c.relpartbound, c.oid)
+--     FROM pg_class c JOIN pg_inherits i ON i.inhrelid = c.oid
+--     JOIN pg_class p ON p.oid = i.inhparent
+--    WHERE p.relname = 'lead_activities';
 
 DO $$
 BEGIN

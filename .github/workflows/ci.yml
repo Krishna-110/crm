@@ -1,0 +1,189 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # A newer push to the same branch supersedes an in-flight run.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: typecheck · build · 195 tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Matches the version used in development (see HANDOFF.md). The schema uses
+        # partitioned tables, GENERATED ALWAYS columns, citext and tsvector, so an older
+        # major is not a safe substitute.
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      # The runner is UTC. That is fine — what breaks a build is MIXING timezones, not the
+      # zone itself: partition bounds are stored as absolute instants, so partitions created
+      # under one zone cannot be extended under another. build-test-db.ts pins the database
+      # to Asia/Kolkata before schema.sql runs, so every partition here is created under one
+      # consistent zone. See db/migrations/018_pin_timezone.sql.
+      TZ: Asia/Kolkata
+
+      # Maintenance connection. `postgres` is the only database that exists before
+      # build-test-db.ts runs, and that script connects there to DROP/CREATE the test
+      # database. Deliberately NOT medcrm_test: build-test-db.ts refuses to run if the target
+      # matches PGDATABASE or MAINT_PGDATABASE, which is the guard against ever rebuilding a
+      # real database.
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: postgres
+      MAINT_PGHOST: localhost
+      MAINT_PGPORT: '5432'
+      MAINT_PGDATABASE: postgres
+      MAINT_PGUSER: postgres
+      MAINT_PGPASSWORD: postgres
+
+      # src/prisma.ts reads DATABASE_URL at import time, so it must be set. vitest.config.ts
+      # rewrites the database name to TEST_PGDATABASE anyway — pointing it at medcrm_test
+      # here just makes that rewrite a no-op instead of naming a database nothing creates.
+      # tests/setup.ts independently refuses to run unless the connection really lands on a
+      # *_test database, so a mistake here fails loudly rather than writing somewhere real.
+      #
+      # app_prisma is created by migration 016 during the build step below. Roles are
+      # cluster-wide, so it exists by the time the suite connects.
+      DATABASE_URL: postgresql://app_prisma:prismatest123@localhost:5432/medcrm_test?schema=public
+      TEST_PGDATABASE: medcrm_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix server
+
+      - name: Generate Prisma client
+        # Introspection-only workflow: the client is generated from the committed
+        # schema.prisma. `prisma migrate` is never run — db/migrations/*.sql is the source of
+        # truth and build-test-db.ts replays it.
+        run: npx prisma generate
+        working-directory: server
+
+      - name: Build test database
+        # Replays schema.sql + seed.sql + every migration from scratch, then shifts the seed
+        # dates so the fixture is time-invariant. This doubles as migration-replay coverage:
+        # if a migration cannot be applied to a clean database, CI fails here.
+        run: npm run test:db
+
+      - name: Typecheck, build, and run the suite
+        run: npm test
+
+      - name: Show database state on failure
+        if: failure()
+        run: |
+          psql "postgresql://postgres:postgres@localhost:5432/medcrm_test" -c "\dt" || true
+          psql "postgresql://postgres:postgres@localhost:5432/medcrm_test" -c "SHOW timezone;" || true
+        env:
+          PGPASSWORD: postgres
+
+  e2e:
+    name: end-to-end (Playwright)
+    runs-on: ubuntu-latest
+    # Separate job because it costs a ~115MB browser download and runs an order of magnitude
+    # slower than the unit/integration suites. Keeping it apart means a logic regression is
+    # reported in ~1 minute rather than waiting on a browser run.
+    needs: test
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      TZ: Asia/Kolkata
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGDATABASE: postgres
+      MAINT_PGHOST: localhost
+      MAINT_PGPORT: '5432'
+      MAINT_PGDATABASE: postgres
+      MAINT_PGUSER: postgres
+      MAINT_PGPASSWORD: postgres
+      DATABASE_URL: postgresql://app_prisma:prismatest123@localhost:5432/medcrm_test?schema=public
+      TEST_PGDATABASE: medcrm_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm ci --prefix server
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+        working-directory: server
+
+      # Browsers are versioned with @playwright/test, so the lockfile hash is the right key.
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium
+        # --with-deps pulls the system libraries headless Chromium needs on a bare runner.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run end-to-end suite
+        # playwright.config.ts starts its own API (:3002 -> medcrm_test) and Vite (:5174),
+        # and its globalSetup rebuilds the database first.
+        run: npm run test:e2e
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

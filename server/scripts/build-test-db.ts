@@ -70,7 +70,25 @@ export async function buildTestDb({ quiet = false } = {}) {
     // FORCE terminates any lingering connections (a watch-mode test run, an open psql).
     await root.query(`DROP DATABASE IF EXISTS ${TEST_DB} WITH (FORCE)`);
     await root.query(`CREATE DATABASE ${TEST_DB}`);
-    say(`  ok  dropped + created ${TEST_DB}`);
+
+    // Pin the timezone BEFORE schema.sql runs, not just via migration 018.
+    //
+    // Partition bounds are stored as absolute instants: the literal in
+    // `FOR VALUES FROM ('2026-05-01')` is resolved using the session timezone at CREATE
+    // time. A partition created under IST and named _2026_05 actually spans
+    // 2026-04-30 18:30Z .. 2026-05-31 18:30Z. So if schema.sql bootstraps partitions under
+    // one timezone and anything later adds them under another, the new bounds overlap the
+    // old ones and CREATE fails:
+    //
+    //   ERROR: partition "lead_activities_2026_04" would overlap partition "..._2026_05"
+    //
+    // On this machine the OS is IST so the whole build was accidentally consistent. On a UTC
+    // CI runner it would not be: schema.sql would lay down UTC-aligned partitions, migration
+    // 018 would then switch to IST, and the seed shift would fail. Setting it here makes the
+    // database IST from its very first statement, which is the only thing that actually
+    // matters — consistency, not which zone.
+    await root.query(`ALTER DATABASE ${TEST_DB} SET timezone = 'Asia/Kolkata'`);
+    say(`  ok  dropped + created ${TEST_DB} (timezone pinned before schema)`);
   } finally {
     await root.end();
   }

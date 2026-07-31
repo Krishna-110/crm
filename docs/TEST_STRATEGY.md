@@ -21,6 +21,7 @@ run in ~4s against an isolated database.
 |---|---|
 | Test runner | Vitest ✅ — `npm --prefix server test` |
 | Suites | Phase 1 ✅ (48) · Phase 2 ✅ (71) · Phase 3 ✅ (50) · Phase 4 ✅ (26) — 195 tests, ~20s |
+| End-to-end | Phase 5 ✅ (27 Playwright, ~2m) — `npm run test:e2e` |
 | Test database | `medcrm_test` ✅ — `npm --prefix server run test:db` |
 | Reset tooling | `server/scripts/reset-test-data.ts` ✅ (dev DB) |
 | Typecheck | `npm --prefix server run typecheck` ✅ — covers `tests/` |
@@ -174,7 +175,7 @@ Mutation-checked: removing `set_app_session()` from `withDbSession` — the exac
 vulnerability that was live during the migration — fails 5 tests; removing the P2010 unwrap
 fails 4; removing the orders admin gate fails 1.
 
-### Phase 4 — SQL/TS parity ✅ 24 tests
+### Phase 4 — SQL/TS parity ✅ 26 tests
 
 The class of bug that ships silently, because nothing crashes. Every test compares two ways
 of computing the same thing **at the same instant**, so the suite is order-independent —
@@ -227,20 +228,85 @@ Mutation-checked: deriving renewal dates in UTC fails the TS/SQL parity test; dr
 column names it exactly (`leads.probe_drift_col exists in the database but not in
 schema.prisma`).
 
-### Phase 5 — Frontend
+### Phase 5 — Frontend ✅ 27 tests
 
-**Playwright E2E** over component tests: login → 6 pages → one write each, both roles.
-It covers the admin/caller gating that currently requires manual checking.
+**Playwright**, `npm run test:e2e`. Automates the admin/caller checking that was being done
+by hand throughout development.
 
-Note: the in-app browser pane does not composite reliably here — pixel clicks silently fail
-and `form_input` does not trigger React's controlled-input state. Verification had to be
-driven through injected JS. **Playwright launches its own browser and is unaffected**, so
-this is a constraint on ad-hoc checking, not on the E2E suite.
+Isolation is the whole design. These tests drive the real app against a real database, so
+pointed at `medcrm` they would corrupt real work. The config therefore starts its **own**
+server pair — API on `:3002` against `medcrm_test`, Vite on `:5174` proxying to it — both
+different from the dev ports, so a dev session can keep running untouched.
+`reuseExistingServer` is off deliberately: reusing a server would silently reconnect the
+tests to the development database. `vite.config.ts` gained an `API_PROXY_TARGET` override
+for this; unset in normal development, so nothing changes.
 
-### Phase 6 — CI
+Covers login (including the seeded-inactive account and reload persistence), per-role counts
+on all five scoped pages plus the global catalogue, the create-lead form, and the dashboard
+consistency regression.
 
-Single `npm test` at root fanning out to both packages; test DB built in CI; `TZ` pinned;
-migration replay on a clean DB as a separate job.
+**Mutation-checked, and it changed the tests.** Removing caller scoping initially failed only
+*one* test: `toContainText('4')` matches the "New 4" status pill on a page showing all 15
+leads, so the count assertions were nearly vacuous. They now assert the page's own total
+phrase (`"4 total leads"`) *and* that the admin's total is absent — which takes the same
+mutant from 1 failure to 2. Reverting the dashboard breakdown to the matview fails the
+consistency regression.
+
+**Two accessibility gaps surfaced while writing this** (not fixed — they are app changes, not
+test changes):
+
+- Lead-form labels are plain `<label class="field-label">` with no `htmlFor`, and the inputs
+  have no `id` or `aria-label`. Nothing associates them, so `getByLabel()` cannot find them
+  and a screen reader would not announce them.
+- `SearchableSelect` renders options as bare `<button>` elements with no `role="listbox"` /
+  `role="option"`, so it is not announced as a combobox.
+
+Both are worked around in `e2e/helpers.ts` by walking the DOM, with the reason noted inline.
+
+A third thing looked like a defect and **was not**: omitting the required medicine row blocks
+submission and appeared to do so silently. It does not — the browser shows its native
+"Please fill out this field." bubble on the visible medicine input. It only looks silent to a
+test, because native validation bubbles are browser chrome rather than DOM and never appear
+in `innerText`. Verified by reading `validationMessage` and the element's bounding box after a
+submit attempt, rather than inferring from a text dump.
+
+### Phase 6 — CI ✅
+
+`.github/workflows/ci.yml` — Postgres 18 service, `npm run test:db`, then `npm test`.
+One entry point at the root fans out to everything:
+
+```
+npm test  ->  typecheck (frontend + server, incl. tests/)
+          ->  build     (frontend + server)
+          ->  195 tests
+```
+
+Migration replay comes free: `test:db` rebuilds from `schema.sql` + every migration against
+an empty database, so a migration that cannot be applied cleanly fails CI before any test
+runs.
+
+**A UTC runner is fine — but only because the build pins the timezone first.** Partition
+bounds are stored as *absolute instants*: the literal in `FOR VALUES FROM ('2026-05-01')` is
+resolved with the session timezone at CREATE time, so a partition created under IST and named
+`_2026_05` actually spans `2026-04-30 18:30Z .. 2026-05-31 18:30Z`. A database whose
+partitions were created under one zone cannot have new ones added under another:
+
+```
+ERROR: partition "lead_activities_2026_04" would overlap partition "lead_activities_2026_05"
+```
+
+Migration 018 alone is not enough, because `schema.sql` bootstraps partitions *before* it
+runs. `build-test-db.ts` therefore pins the zone immediately after `CREATE DATABASE`, and
+`db/README.md` has it as install step 0. What matters is consistency, not the zone — a build
+that is UTC throughout succeeds (verified).
+
+End-to-end runs as a **separate job** gated on the first one: it costs a ~115MB browser
+download and is an order of magnitude slower, so a logic regression is reported in about a
+minute rather than waiting on a browser run. Browsers are cached against the lockfile hash,
+and the Playwright report uploads as an artifact on failure.
+
+Left for later: publishing coverage, and a scheduled run to catch date-dependent rot that a
+per-commit run would miss.
 
 ---
 

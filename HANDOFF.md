@@ -88,6 +88,13 @@ npm --prefix server install
 # migrations 001-017 in order (see db/README.md). Then:
 npm --prefix server run setup      # resets demo passwords, refreshes matviews
 
+# tests (195, ~20s) — rebuilds an isolated medcrm_test database first:
+npm run test:db
+npm test                           # typecheck + build + 195 tests; what CI runs
+npm run test:e2e                   # 27 Playwright tests in a real browser (~2 min)
+                                   #   starts its OWN API :3002 + Vite :5174 against
+                                   #   medcrm_test, so dev servers/data are untouched
+
 # day to day:
 npm run dev:all                    # concurrently runs Vite (5173) + API (3001)
 ```

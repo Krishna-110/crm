@@ -33,3 +33,9 @@ server/.env
 
 # Claude Code project config (not for the repo)
 .claude/
+
+# Playwright run artifacts (traces, screenshots, HTML report) — regenerated every run.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

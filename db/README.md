@@ -10,6 +10,13 @@ Run these in order against a fresh database (PostgreSQL 15+):
 
 ```bash
 createdb medcrm
+
+# 0. Pin the timezone BEFORE schema.sql. Partition bounds are stored as absolute instants,
+#    so the zone in effect when the first partitions are created is baked in — and adding
+#    partitions later under a different zone fails with "would overlap partition ...".
+#    Consistency is what matters; the app assumes Asia/Kolkata throughout.
+psql -d medcrm -c "ALTER DATABASE medcrm SET timezone = 'Asia/Kolkata'"
+
 psql -d medcrm -f schema.sql                                  # 1. base schema (tables, RLS, triggers, views)
 psql -d medcrm -f seed.sql                                    # 2. sample data (optional, for demo/dev)
 psql -d medcrm -f migrations/001_app_reconciliation.sql       # 3. app-compatibility layer
